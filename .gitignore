@@ -1,0 +1,9 @@
+node_modules/
+dist/
+src-tauri/target/
+*.png
+*.jpg
+*.jpeg
+!src-tauri/icons/*.png
+.DS_Store
+.playwright-mcp/

@@ -1,0 +1,519 @@
+import { PublishDialog } from "@/components/PublishDialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { checkUpdates, listSkills, pullSkill, scanLocalSkills, uninstallSkill } from "@/lib/api";
+import { notify } from "@/lib/notifications";
+import { useConfigStore } from "@/lib/store";
+import { tagStyle } from "@/lib/tag-colors";
+import type { LocalSkill, SyncStatus, UpdateInfo } from "@/lib/types";
+import { cn } from "@/lib/utils";
+import {
+	ArrowUpCircle,
+	Check,
+	CircleDot,
+	Clock,
+	FolderOpen,
+	HardDrive,
+	Loader2,
+	RefreshCw,
+	Search,
+	Trash2,
+	Upload,
+	X,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+function timeAgo(unixSeconds: string): string {
+	const now = Date.now();
+	const then = Number(unixSeconds) * 1000;
+	const diff = now - then;
+	const minutes = Math.floor(diff / 60000);
+	if (minutes < 1) return "just now";
+	if (minutes < 60) return `${minutes}m ago`;
+	const hours = Math.floor(minutes / 60);
+	if (hours < 24) return `${hours}h ago`;
+	const days = Math.floor(hours / 24);
+	if (days < 30) return `${days}d ago`;
+	const months = Math.floor(days / 30);
+	if (months < 12) return `${months}mo ago`;
+	const years = Math.floor(days / 365);
+	return `${years}y ago`;
+}
+
+type AgentFilter = "claude" | "codex" | "cursor";
+type ScopeFilter = "project" | "user";
+
+const AGENTS: AgentFilter[] = ["claude", "codex", "cursor"];
+const SCOPES: ScopeFilter[] = ["project", "user"];
+
+function getSkillSlug(skill: LocalSkill): string {
+	const dirName = skill.path.split("/").pop() || skill.path.split("\\").pop() || "";
+	return dirName.toLowerCase();
+}
+
+function getSyncStatus(
+	skill: LocalSkill,
+	updates: UpdateInfo[],
+	registryNames: Set<string>,
+): SyncStatus {
+	const hasUpdate = updates.some(
+		(u) => u.name === skill.name && u.agent === skill.agent && u.scope === skill.scope,
+	);
+	if (hasUpdate) return "update_available";
+
+	const slug = getSkillSlug(skill);
+	const inRegistry = registryNames.has(skill.name.toLowerCase()) || registryNames.has(slug);
+
+	if (inRegistry) return "synced";
+	return "unknown";
+}
+
+function StatusBadge({ status, update }: { status: SyncStatus; update?: UpdateInfo }) {
+	switch (status) {
+		case "synced":
+			return (
+				<span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400 border border-emerald-500/20">
+					<Check className="size-3" />
+					Up to date
+				</span>
+			);
+		case "update_available":
+			return (
+				<span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-400 border border-amber-500/20">
+					<ArrowUpCircle className="size-3" />
+					{update ? `${update.localVersion} → ${update.serverVersion}` : "Update"}
+				</span>
+			);
+		case "unknown":
+			return (
+				<span className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-400 border border-blue-500/20">
+					<HardDrive className="size-3" />
+					Local only
+				</span>
+			);
+		default:
+			return null;
+	}
+}
+
+export function Installed() {
+	const org = useConfigStore((s) => s.config.org);
+	const [skills, setSkills] = useState<LocalSkill[]>([]);
+	const [updates, setUpdates] = useState<UpdateInfo[]>([]);
+	const [registryNames, setRegistryNames] = useState<Set<string>>(new Set());
+	const [loading, setLoading] = useState(true);
+	const [error, setError] = useState<string | null>(null);
+	const [actionLoading, setActionLoading] = useState<string | null>(null);
+	const [publishSkill, setPublishSkill] = useState<LocalSkill | null>(null);
+
+	const [search, setSearch] = useState("");
+	const [debouncedSearch, setDebouncedSearch] = useState("");
+	const [selectedAgents, setSelectedAgents] = useState<AgentFilter[]>([]);
+	const [selectedScopes, setSelectedScopes] = useState<ScopeFilter[]>([]);
+
+	const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+	const load = useCallback(async () => {
+		setLoading(true);
+		setError(null);
+		try {
+			const result = await scanLocalSkills();
+			setSkills(result);
+
+			if (org) {
+				// Load registry names + updates in parallel
+				const [updResult, catalogResult] = await Promise.allSettled([
+					result.length > 0 ? checkUpdates(org, result) : Promise.resolve([]),
+					listSkills({ org, page: 1, limit: 200 }),
+				]);
+
+				if (updResult.status === "fulfilled") setUpdates(updResult.value);
+				if (catalogResult.status === "fulfilled") {
+					setRegistryNames(new Set(catalogResult.value.skills.map((s) => s.name.toLowerCase())));
+				}
+			}
+		} catch (e) {
+			setError(typeof e === "string" ? e : "Failed to scan local skills");
+		} finally {
+			setLoading(false);
+		}
+	}, [org]);
+
+	useEffect(() => {
+		load();
+	}, [load]);
+
+	const handleSearch = (value: string) => {
+		setSearch(value);
+		clearTimeout(debounceRef.current);
+		debounceRef.current = setTimeout(() => setDebouncedSearch(value), 200);
+	};
+
+	const toggleAgent = (agent: AgentFilter) => {
+		setSelectedAgents((prev) =>
+			prev.includes(agent) ? prev.filter((a) => a !== agent) : [...prev, agent],
+		);
+	};
+
+	const toggleScope = (scope: ScopeFilter) => {
+		setSelectedScopes((prev) =>
+			prev.includes(scope) ? prev.filter((s) => s !== scope) : [...prev, scope],
+		);
+	};
+
+	const filteredSkills = useMemo(() => {
+		let result = skills;
+
+		if (debouncedSearch) {
+			const q = debouncedSearch.toLowerCase();
+			result = result.filter(
+				(s) =>
+					s.name.toLowerCase().includes(q) ||
+					s.description.toLowerCase().includes(q) ||
+					s.tags.some((t) => t.toLowerCase().includes(q)),
+			);
+		}
+
+		if (selectedAgents.length > 0) {
+			result = result.filter((s) => selectedAgents.includes(s.agent as AgentFilter));
+		}
+
+		if (selectedScopes.length > 0) {
+			result = result.filter((s) => selectedScopes.includes(s.scope as ScopeFilter));
+		}
+
+		return result.sort((a, b) => a.name.localeCompare(b.name));
+	}, [skills, debouncedSearch, selectedAgents, selectedScopes]);
+
+	const stats = useMemo(() => {
+		const updateCount = updates.length;
+		const localOnly = skills.filter((s) => {
+			const slug = getSkillSlug(s);
+			return !registryNames.has(s.name.toLowerCase()) && !registryNames.has(slug);
+		}).length;
+		return { total: skills.length, updateCount, localOnly };
+	}, [skills, updates, registryNames]);
+
+	const presentAgents = useMemo(
+		() => AGENTS.filter((a) => skills.some((s) => s.agent === a)),
+		[skills],
+	);
+	const presentScopes = useMemo(
+		() => SCOPES.filter((sc) => skills.some((s) => s.scope === sc)),
+		[skills],
+	);
+
+	const hasActiveFilters =
+		debouncedSearch || selectedAgents.length > 0 || selectedScopes.length > 0;
+
+	const handleUninstall = async (skill: LocalSkill) => {
+		const key = `${skill.agent}:${skill.scope}:${skill.name}`;
+		setActionLoading(key);
+		try {
+			await uninstallSkill(skill.name, skill.agent, skill.scope);
+			setSkills((prev) =>
+				prev.filter(
+					(s) => !(s.name === skill.name && s.agent === skill.agent && s.scope === skill.scope),
+				),
+			);
+			notify("Skill uninstalled", skill.name);
+		} catch (e) {
+			notify("Operation failed", typeof e === "string" ? e : "Uninstall failed");
+		} finally {
+			setActionLoading(null);
+		}
+	};
+
+	const handleUpdate = async (update: UpdateInfo) => {
+		if (!org) return;
+		const key = `${update.agent}:${update.scope}:${update.name}`;
+		setActionLoading(key);
+		try {
+			await pullSkill({
+				org,
+				name: update.name,
+				version: update.serverVersion,
+				agent: update.agent,
+				scope: update.scope,
+			});
+			setUpdates((prev) => prev.filter((u) => u.name !== update.name));
+			await load();
+			notify("Skill updated", `${update.name} v${update.serverVersion}`);
+		} catch (e) {
+			notify("Operation failed", typeof e === "string" ? e : "Update failed");
+		} finally {
+			setActionLoading(null);
+		}
+	};
+
+	const getUpdate = (skill: LocalSkill) =>
+		updates.find(
+			(u) => u.name === skill.name && u.agent === skill.agent && u.scope === skill.scope,
+		);
+
+	if (loading) {
+		return (
+			<div className="flex items-center justify-center h-full">
+				<Loader2 className="size-6 animate-spin text-muted-foreground" />
+			</div>
+		);
+	}
+
+	if (error) {
+		return (
+			<div className="flex flex-col items-center justify-center gap-3 h-full">
+				<p className="text-sm text-destructive">{error}</p>
+				<Button variant="outline" size="sm" onClick={load}>
+					Retry
+				</Button>
+			</div>
+		);
+	}
+
+	return (
+		<div className="flex flex-col gap-4 p-6">
+			{/* Header */}
+			<div className="flex items-center justify-between">
+				<h1 className="text-lg font-semibold">Installed Skills</h1>
+				<Button variant="outline" size="sm" onClick={load}>
+					<RefreshCw className="size-3.5" />
+					Refresh
+				</Button>
+			</div>
+
+			{/* Stats */}
+			{skills.length > 0 && (
+				<div className="flex items-center gap-4 text-sm">
+					<span className="text-muted-foreground">
+						<span className="font-medium text-foreground">{stats.total}</span> installed
+					</span>
+					{stats.updateCount > 0 && (
+						<span className="text-amber-400">
+							<span className="font-medium">{stats.updateCount}</span> update
+							{stats.updateCount > 1 ? "s" : ""}
+						</span>
+					)}
+					{stats.localOnly > 0 && (
+						<span className="text-blue-400">
+							<span className="font-medium">{stats.localOnly}</span> local only
+						</span>
+					)}
+				</div>
+			)}
+
+			{skills.length === 0 ? (
+				<div className="flex flex-col items-center justify-center gap-2 py-12">
+					<FolderOpen className="size-10 text-muted-foreground" />
+					<p className="text-muted-foreground">No skills installed</p>
+				</div>
+			) : (
+				<>
+					{/* Search */}
+					<div className="relative">
+						<Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+						<Input
+							placeholder="Search installed skills..."
+							value={search}
+							onChange={(e) => handleSearch(e.target.value)}
+							className="pl-9"
+						/>
+					</div>
+
+					{/* Filters */}
+					{(presentAgents.length > 1 || presentScopes.length > 1) && (
+						<div className="flex items-center gap-3 flex-wrap">
+							{presentAgents.length > 1 &&
+								presentAgents.map((agent) => {
+									const active = selectedAgents.includes(agent);
+									return (
+										<button
+											key={agent}
+											type="button"
+											onClick={() => toggleAgent(agent)}
+											className={cn(
+												"inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-all cursor-pointer",
+												active
+													? "bg-primary/15 text-primary border-primary/40"
+													: "bg-transparent text-muted-foreground border-border hover:border-muted-foreground/40",
+											)}
+										>
+											<CircleDot className="size-3" />
+											{agent}
+											{active && <X className="size-3 opacity-70" />}
+										</button>
+									);
+								})}
+							{presentAgents.length > 1 && presentScopes.length > 1 && (
+								<div className="h-4 w-px bg-border" />
+							)}
+							{presentScopes.length > 1 &&
+								presentScopes.map((scope) => {
+									const active = selectedScopes.includes(scope);
+									return (
+										<button
+											key={scope}
+											type="button"
+											onClick={() => toggleScope(scope)}
+											className={cn(
+												"inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-all cursor-pointer",
+												active
+													? "bg-primary/15 text-primary border-primary/40"
+													: "bg-transparent text-muted-foreground border-border hover:border-muted-foreground/40",
+											)}
+										>
+											{scope}
+											{active && <X className="size-3 opacity-70" />}
+										</button>
+									);
+								})}
+							{hasActiveFilters && (
+								<button
+									type="button"
+									onClick={() => {
+										setSearch("");
+										setDebouncedSearch("");
+										setSelectedAgents([]);
+										setSelectedScopes([]);
+									}}
+									className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+								>
+									Clear all
+								</button>
+							)}
+						</div>
+					)}
+
+					{/* Skills list */}
+					{filteredSkills.length > 0 ? (
+						<div className="space-y-2">
+							{filteredSkills.map((skill) => {
+								const update = getUpdate(skill);
+								const status = getSyncStatus(skill, updates, registryNames);
+								const key = `${skill.agent}:${skill.scope}:${skill.name}`;
+								const isLoading = actionLoading === key;
+
+								return (
+									<div
+										key={key}
+										className="flex items-center justify-between rounded-xl border bg-card p-4 gap-4"
+									>
+										<div className="flex flex-col gap-1.5 min-w-0 flex-1">
+											<div className="flex items-center gap-2 flex-wrap">
+												<span className="font-medium truncate">{skill.name}</span>
+												<Badge variant="secondary">{skill.version}</Badge>
+												<StatusBadge status={status} update={update} />
+											</div>
+											{skill.description && (
+												<p className="text-sm text-muted-foreground line-clamp-1">
+													{skill.description}
+												</p>
+											)}
+											<div className="flex items-center gap-2 flex-wrap">
+												{skill.tags.length > 0 && (
+													<div className="flex flex-wrap gap-1">
+														{skill.tags.slice(0, 4).map((tag) => (
+															<span
+																key={tag}
+																className="inline-flex items-center rounded-full border px-2 py-0 text-[11px] font-medium"
+																style={tagStyle(tag, false)}
+															>
+																{tag}
+															</span>
+														))}
+													</div>
+												)}
+												<span className="text-[11px] text-muted-foreground/50">
+													{skill.agent} · {skill.scope}
+													{skill.modified_at && (
+														<>
+															{" · "}
+															<Clock className="inline size-2.5 -mt-px" />
+															{"  "}
+															{timeAgo(skill.modified_at)}
+														</>
+													)}
+												</span>
+											</div>
+										</div>
+
+										<div className="flex items-center gap-2 shrink-0">
+											{update && (
+												<Button
+													variant="outline"
+													size="sm"
+													disabled={isLoading}
+													onClick={() => handleUpdate(update)}
+													className="text-accent"
+												>
+													{isLoading ? (
+														<Loader2 className="size-3.5 animate-spin" />
+													) : (
+														<ArrowUpCircle className="size-3.5" />
+													)}
+													Update
+												</Button>
+											)}
+											{org && (
+												<Button
+													variant="outline"
+													size="sm"
+													disabled={isLoading}
+													onClick={() => setPublishSkill(skill)}
+												>
+													<Upload className="size-3.5" />
+												</Button>
+											)}
+											<Button
+												variant="ghost"
+												size="sm"
+												disabled={isLoading}
+												onClick={() => handleUninstall(skill)}
+												className="text-destructive hover:text-destructive"
+											>
+												{isLoading ? (
+													<Loader2 className="size-3.5 animate-spin" />
+												) : (
+													<Trash2 className="size-3.5" />
+												)}
+											</Button>
+										</div>
+									</div>
+								);
+							})}
+						</div>
+					) : (
+						<div className="flex flex-col items-center justify-center gap-2 py-12">
+							<FolderOpen className="size-10 text-muted-foreground" />
+							<p className="text-muted-foreground">No skills match your filters</p>
+							<Button
+								variant="outline"
+								size="sm"
+								onClick={() => {
+									setSearch("");
+									setDebouncedSearch("");
+									setSelectedAgents([]);
+									setSelectedScopes([]);
+								}}
+							>
+								Clear filters
+							</Button>
+						</div>
+					)}
+				</>
+			)}
+
+			{publishSkill && org && (
+				<PublishDialog
+					skill={publishSkill}
+					org={org}
+					onClose={() => setPublishSkill(null)}
+					onPublished={() => {
+						setPublishSkill(null);
+						load();
+					}}
+				/>
+			)}
+		</div>
+	);
+}

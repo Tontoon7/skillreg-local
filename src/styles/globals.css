@@ -1,0 +1,207 @@
+@import "tailwindcss";
+
+@theme {
+	--color-background: #0a0a0f;
+	--color-foreground: #f8fafc;
+	--color-card: #1e1e2e;
+	--color-card-foreground: #f8fafc;
+	--color-popover: #1e1e2e;
+	--color-popover-foreground: #f8fafc;
+	--color-primary: #4f46e5;
+	--color-primary-foreground: #ffffff;
+	--color-secondary: #1e293b;
+	--color-secondary-foreground: #f8fafc;
+	--color-muted: #1e293b;
+	--color-muted-foreground: #94a3b8;
+	--color-accent: #10b981;
+	--color-accent-foreground: #ffffff;
+	--color-destructive: #ef4444;
+	--color-border: #1e293b;
+	--color-input: #1e293b;
+	--color-ring: #4f46e5;
+	--color-sidebar: #0d0d14;
+	--color-sidebar-foreground: #f8fafc;
+	--color-sidebar-border: #1e293b;
+	--color-sidebar-accent: #1e293b;
+	--color-sidebar-accent-foreground: #f8fafc;
+	--color-sidebar-ring: #4f46e5;
+	--color-surface: #1e1e2e;
+	--radius: 0.625rem;
+}
+
+@layer base {
+	* {
+		@apply border-border outline-ring/50;
+	}
+	body {
+		@apply bg-background text-foreground;
+		font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	}
+
+	.light {
+		--color-background: #ffffff;
+		--color-foreground: #0f172a;
+		--color-card: #f8fafc;
+		--color-card-foreground: #0f172a;
+		--color-popover: #ffffff;
+		--color-popover-foreground: #0f172a;
+		--color-primary: #4f46e5;
+		--color-primary-foreground: #ffffff;
+		--color-secondary: #f1f5f9;
+		--color-secondary-foreground: #0f172a;
+		--color-muted: #f1f5f9;
+		--color-muted-foreground: #64748b;
+		--color-accent: #10b981;
+		--color-accent-foreground: #ffffff;
+		--color-destructive: #ef4444;
+		--color-border: #e2e8f0;
+		--color-input: #e2e8f0;
+		--color-ring: #4f46e5;
+		--color-sidebar: #f8fafc;
+		--color-sidebar-foreground: #0f172a;
+		--color-sidebar-border: #e2e8f0;
+		--color-sidebar-accent: #f1f5f9;
+		--color-sidebar-accent-foreground: #0f172a;
+		--color-sidebar-ring: #4f46e5;
+		--color-surface: #f1f5f9;
+	}
+
+	/* Markdown prose styling */
+	.prose {
+		color: var(--color-foreground);
+		font-size: 0.875rem;
+		line-height: 1.7;
+	}
+	.prose > * + * {
+		margin-top: 1em;
+	}
+	.prose h1 {
+		font-size: 1.5rem;
+		font-weight: 700;
+		color: var(--color-foreground);
+		margin-top: 1.5em;
+		margin-bottom: 0.5em;
+		line-height: 1.3;
+	}
+	.prose h2 {
+		font-size: 1.25rem;
+		font-weight: 600;
+		color: var(--color-foreground);
+		margin-top: 1.5em;
+		margin-bottom: 0.5em;
+		line-height: 1.3;
+		padding-bottom: 0.25em;
+		border-bottom: 1px solid var(--color-border);
+	}
+	.prose h3 {
+		font-size: 1.1rem;
+		font-weight: 600;
+		color: var(--color-foreground);
+		margin-top: 1.25em;
+		margin-bottom: 0.5em;
+		line-height: 1.4;
+	}
+	.prose h4 {
+		font-size: 1rem;
+		font-weight: 600;
+		color: var(--color-foreground);
+		margin-top: 1em;
+		margin-bottom: 0.5em;
+	}
+	.prose p {
+		margin-top: 0.75em;
+		margin-bottom: 0.75em;
+	}
+	.prose a {
+		color: var(--color-primary);
+		text-decoration: underline;
+		text-underline-offset: 2px;
+	}
+	.prose a:hover {
+		opacity: 0.8;
+	}
+	.prose strong {
+		font-weight: 600;
+		color: var(--color-foreground);
+	}
+	.prose ul {
+		list-style-type: disc;
+		padding-left: 1.5em;
+		margin-top: 0.5em;
+		margin-bottom: 0.5em;
+	}
+	.prose ol {
+		list-style-type: decimal;
+		padding-left: 1.5em;
+		margin-top: 0.5em;
+		margin-bottom: 0.5em;
+	}
+	.prose li {
+		margin-top: 0.25em;
+		margin-bottom: 0.25em;
+	}
+	.prose li > ul,
+	.prose li > ol {
+		margin-top: 0.25em;
+		margin-bottom: 0.25em;
+	}
+	.prose code {
+		background: var(--color-surface);
+		padding: 0.15rem 0.35rem;
+		border-radius: 0.25rem;
+		font-size: 0.85em;
+		font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+	}
+	.prose pre {
+		background: var(--color-surface);
+		padding: 1rem;
+		border-radius: 0.5rem;
+		overflow-x: auto;
+		margin-top: 1em;
+		margin-bottom: 1em;
+		line-height: 1.6;
+	}
+	.prose pre code {
+		background: transparent;
+		padding: 0;
+		font-size: 0.8rem;
+	}
+	.prose blockquote {
+		border-left: 3px solid var(--color-primary);
+		padding-left: 1rem;
+		color: var(--color-muted-foreground);
+		margin-top: 1em;
+		margin-bottom: 1em;
+		font-style: italic;
+	}
+	.prose hr {
+		border: none;
+		border-top: 1px solid var(--color-border);
+		margin-top: 1.5em;
+		margin-bottom: 1.5em;
+	}
+	.prose table {
+		width: 100%;
+		border-collapse: collapse;
+		margin-top: 1em;
+		margin-bottom: 1em;
+		font-size: 0.85rem;
+	}
+	.prose th {
+		text-align: left;
+		font-weight: 600;
+		padding: 0.5rem 0.75rem;
+		border-bottom: 2px solid var(--color-border);
+	}
+	.prose td {
+		padding: 0.5rem 0.75rem;
+		border-bottom: 1px solid var(--color-border);
+	}
+	.prose img {
+		max-width: 100%;
+		border-radius: 0.5rem;
+	}
+	.prose > :first-child {
+		margin-top: 0;
+	}
+}
