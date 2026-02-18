@@ -2,7 +2,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
-import { deleteEnvVars, getEnvVars, importEnvFile, listAllEnvVars, scanLocalSkills, setEnvVars } from "@/lib/api";
+import {
+	deleteEnvVars,
+	getEnvVars,
+	importEnvFile,
+	listAllEnvVars,
+	scanLocalSkills,
+	setEnvVars,
+} from "@/lib/api";
 import { useConfigStore } from "@/lib/store";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
@@ -29,6 +36,7 @@ export function EnvVars() {
 	const org = useConfigStore((s) => s.config.org);
 
 	const [skills, setSkills] = useState<string[]>([]);
+	const [orphanSkills, setOrphanSkills] = useState<string[]>([]);
 	const [selectedSkill, setSelectedSkill] = useState("");
 	const [entries, setEntries] = useState<EnvEntry[]>([]);
 	const [loading, setLoading] = useState(true);
@@ -42,19 +50,23 @@ export function EnvVars() {
 		if (!org) return;
 		setLoading(true);
 		try {
-			const [all, installed] = await Promise.all([
-				listAllEnvVars(org),
-				scanLocalSkills(),
-			]);
-			const installedNames = new Set(
-				installed.map((s) => s.name.toLowerCase()),
-			);
-			const skillNames = all
+			const [allEnv, installed] = await Promise.all([listAllEnvVars(org), scanLocalSkills()]);
+
+			// Primary: all locally installed skills
+			const installedNames = [...new Set(installed.map((s) => s.name))];
+			installedNames.sort((a, b) => a.localeCompare(b));
+
+			// Orphans: skills with env vars but no longer installed
+			const installedLower = new Set(installedNames.map((n) => n.toLowerCase()));
+			const orphans = allEnv
 				.map((s) => s.skill)
-				.filter((name) => installedNames.has(name.toLowerCase()));
-			setSkills(skillNames);
-			if (skillNames.length > 0 && !selectedSkill) {
-				setSelectedSkill(skillNames[0]);
+				.filter((name) => !installedLower.has(name.toLowerCase()));
+
+			setSkills(installedNames);
+			setOrphanSkills([...new Set(orphans)]);
+
+			if (!selectedSkill && installedNames.length > 0) {
+				setSelectedSkill(installedNames[0]);
 			}
 		} catch {
 			// Non-blocking
@@ -169,13 +181,26 @@ export function EnvVars() {
 			<div className="flex items-center gap-3">
 				<div className="flex-1 space-y-1.5">
 					<Label>Skill</Label>
-					{skills.length > 0 ? (
+					{skills.length > 0 || orphanSkills.length > 0 ? (
 						<Select value={selectedSkill} onChange={(e) => setSelectedSkill(e.target.value)}>
-							{skills.map((s) => (
-								<option key={s} value={s}>
-									{s}
-								</option>
-							))}
+							{skills.length > 0 && (
+								<optgroup label="Installed">
+									{skills.map((s) => (
+										<option key={s} value={s}>
+											{s}
+										</option>
+									))}
+								</optgroup>
+							)}
+							{orphanSkills.length > 0 && (
+								<optgroup label="Not installed (have vars)">
+									{orphanSkills.map((s) => (
+										<option key={s} value={s}>
+											{s}
+										</option>
+									))}
+								</optgroup>
+							)}
 						</Select>
 					) : (
 						<Input

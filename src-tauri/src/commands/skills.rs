@@ -99,11 +99,21 @@ pub struct SearchResponse {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct EnvVarDecl {
+    pub name: String,
+    pub description: String,
+    pub required: bool,
+    pub default: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InstallResult {
     pub name: String,
     pub version: String,
     pub path: String,
     pub files_count: usize,
+    pub env_vars: Vec<EnvVarDecl>,
 }
 
 fn get_auth_client() -> Result<(reqwest::Client, String), String> {
@@ -358,12 +368,136 @@ pub async fn pull_skill(
         }
     }
 
+    // 6. Parse env vars from installed SKILL.md
+    let env_vars = install_dir
+        .join("SKILL.md")
+        .exists()
+        .then(|| {
+            fs::read_to_string(install_dir.join("SKILL.md"))
+                .ok()
+                .map(|c| parse_env_from_frontmatter(&c))
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+
     Ok(InstallResult {
         name: name.clone(),
         version: target_version,
         path: install_dir.to_string_lossy().into_owned(),
         files_count: file_count,
+        env_vars,
     })
+}
+
+fn parse_env_from_frontmatter(content: &str) -> Vec<EnvVarDecl> {
+    let mut result = Vec::new();
+
+    let fm_content = match content.strip_prefix("---\n") {
+        Some(rest) => match rest.find("\n---") {
+            Some(i) => &rest[..i],
+            None => return result,
+        },
+        None => return result,
+    };
+
+    let mut in_env = false;
+    let mut in_item = false;
+    let mut name = String::new();
+    let mut description = String::new();
+    let mut required = false;
+    let mut default_val: Option<String> = None;
+
+    let flush = |result: &mut Vec<EnvVarDecl>,
+                 name: &mut String,
+                 description: &mut String,
+                 required: &mut bool,
+                 default_val: &mut Option<String>| {
+        if !name.is_empty() {
+            result.push(EnvVarDecl {
+                name: name.clone(),
+                description: description.clone(),
+                required: *required,
+                default: default_val.clone(),
+            });
+        }
+        name.clear();
+        description.clear();
+        *required = false;
+        *default_val = None;
+    };
+
+    for line in fm_content.lines() {
+        let trimmed = line.trim();
+
+        // Detect start of env: section
+        if trimmed == "env:" {
+            in_env = true;
+            continue;
+        }
+
+        if !in_env {
+            continue;
+        }
+
+        // Top-level key at indent 0 → end of env section
+        let indent = line.len() - line.trim_start().len();
+        if indent == 0 && !trimmed.is_empty() {
+            break;
+        }
+
+        // List item: "- name: FOO"
+        if trimmed.starts_with("- ") {
+            // Flush previous item
+            flush(
+                &mut result,
+                &mut name,
+                &mut description,
+                &mut required,
+                &mut default_val,
+            );
+            in_item = true;
+
+            let after_dash = trimmed.strip_prefix("- ").unwrap().trim();
+            if let Some(sep) = after_dash.find(':') {
+                let key = after_dash[..sep].trim();
+                let val = after_dash[sep + 1..].trim().trim_matches(|c| c == '"' || c == '\'');
+                match key {
+                    "name" => name = val.to_string(),
+                    "description" => description = val.to_string(),
+                    "required" => required = val == "true",
+                    "default" => default_val = Some(val.to_string()),
+                    _ => {}
+                }
+            }
+            continue;
+        }
+
+        // Continuation lines (indented properties of current item)
+        if in_item && indent >= 4 {
+            if let Some(sep) = trimmed.find(':') {
+                let key = trimmed[..sep].trim();
+                let val = trimmed[sep + 1..].trim().trim_matches(|c| c == '"' || c == '\'');
+                match key {
+                    "name" => name = val.to_string(),
+                    "description" => description = val.to_string(),
+                    "required" => required = val == "true",
+                    "default" => default_val = Some(val.to_string()),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // Flush last item
+    flush(
+        &mut result,
+        &mut name,
+        &mut description,
+        &mut required,
+        &mut default_val,
+    );
+
+    result
 }
 
 fn get_install_path(

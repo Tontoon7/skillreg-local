@@ -101,11 +101,19 @@ export interface SearchResponse {
 	total: number;
 }
 
+export interface EnvVarDecl {
+	name: string;
+	description: string;
+	required: boolean;
+	default?: string;
+}
+
 export interface InstallResult {
 	name: string;
 	version: string;
 	path: string;
 	filesCount: number;
+	envVars: EnvVarDecl[];
 }
 
 export interface PushResult {

@@ -1,9 +1,10 @@
+import { EnvVarSetupDialog } from "@/components/EnvVarSetupDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { getSkill, pullSkill } from "@/lib/api";
 import { useConfigStore } from "@/lib/store";
-import type { AgentType, ScopeType, SkillDetail as SkillDetailType } from "@/lib/types";
+import type { AgentType, EnvVarDecl, ScopeType, SkillDetail as SkillDetailType } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
@@ -116,6 +117,8 @@ function SkillDetailInner() {
 	const [installing, setInstalling] = useState(false);
 	const [installed, setInstalled] = useState(false);
 	const [installError, setInstallError] = useState<string | null>(null);
+	const [detectedEnvVars, setDetectedEnvVars] = useState<EnvVarDecl[]>([]);
+	const [showEnvDialog, setShowEnvDialog] = useState(false);
 
 	useEffect(() => {
 		if (!org || !name) return;
@@ -157,7 +160,7 @@ function SkillDetailInner() {
 		setInstalling(true);
 		setInstallError(null);
 		try {
-			await pullSkill({
+			const result = await pullSkill({
 				org,
 				name,
 				version: selectedVersion || undefined,
@@ -166,6 +169,10 @@ function SkillDetailInner() {
 				projectDir: scope === "project" ? (projectDir ?? undefined) : undefined,
 			});
 			setInstalled(true);
+			if (result.envVars.length > 0) {
+				setDetectedEnvVars(result.envVars);
+				setShowEnvDialog(true);
+			}
 		} catch (e) {
 			setInstallError(typeof e === "string" ? e : "Install failed");
 		} finally {
@@ -262,9 +269,7 @@ function SkillDetailInner() {
 								{/* Markdown body */}
 								{parsed?.body?.trim() ? (
 									<div className="prose max-w-none">
-										<Markdown rehypePlugins={[rehypeSanitize]}>
-											{parsed.body}
-										</Markdown>
+										<Markdown rehypePlugins={[rehypeSanitize]}>{parsed.body}</Markdown>
 									</div>
 								) : (
 									<p className="text-muted-foreground">No instructions available</p>
@@ -284,9 +289,7 @@ function SkillDetailInner() {
 												<Badge variant={v.status === "approved" ? "secondary" : "outline"}>
 													{v.version}
 												</Badge>
-												<span className="text-xs text-muted-foreground capitalize">
-													{v.status}
-												</span>
+												<span className="text-xs text-muted-foreground capitalize">{v.status}</span>
 											</div>
 											<div className="flex items-center gap-4 text-xs text-muted-foreground">
 												<span className="flex items-center gap-1">
@@ -459,6 +462,16 @@ function SkillDetailInner() {
 					)}
 				</aside>
 			</div>
+
+			{showEnvDialog && org && name && (
+				<EnvVarSetupDialog
+					skillName={name}
+					org={org}
+					envVars={detectedEnvVars}
+					onClose={() => setShowEnvDialog(false)}
+					onSaved={() => setShowEnvDialog(false)}
+				/>
+			)}
 		</div>
 	);
 }
