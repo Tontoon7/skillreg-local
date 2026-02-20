@@ -86,7 +86,7 @@
 ## Phase 6 — Polish + Packaging
 
 - [x] Tray icon
-- [x] Auto-update (config)
+- [x] Auto-update (plugin + keypair + UI banner)
 - [x] Icône app (toutes tailles, .icns, .ico)
 - [x] Custom titlebar
 - [x] Notifications OS
