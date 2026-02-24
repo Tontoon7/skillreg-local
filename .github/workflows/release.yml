@@ -79,7 +79,6 @@ jobs:
           releaseBody: 'See the assets below for download links.'
           releaseDraft: true
           prerelease: false
-          includeUpdaterJson: false
           args: ${{ matrix.args }}
 
       - name: Collect updater artifacts
