@@ -17,15 +17,19 @@ jobs:
           - platform: macos-latest
             args: '--target aarch64-apple-darwin'
             rust_target: aarch64-apple-darwin
+            updater_platform: darwin-aarch64
           - platform: macos-latest
             args: '--target x86_64-apple-darwin'
             rust_target: x86_64-apple-darwin
+            updater_platform: darwin-x86_64
           - platform: ubuntu-22.04
             args: ''
             rust_target: ''
+            updater_platform: linux-x86_64
           - platform: windows-latest
             args: ''
             rust_target: ''
+            updater_platform: windows-x86_64
 
     runs-on: ${{ matrix.platform }}
 
@@ -66,7 +70,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # Apple code signing (macOS only, ignored on other platforms)
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -76,4 +79,122 @@ jobs:
           releaseBody: 'See the assets below for download links.'
           releaseDraft: true
           prerelease: false
+          includeUpdaterJson: false
           args: ${{ matrix.args }}
+
+      - name: Collect updater artifacts (macOS)
+        if: startsWith(matrix.platform, 'macos')
+        run: |
+          mkdir -p updater-artifacts
+          BUNDLE_DIR="src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos"
+          cp "$BUNDLE_DIR"/*.app.tar.gz updater-artifacts/ 2>/dev/null || true
+          cp "$BUNDLE_DIR"/*.app.tar.gz.sig updater-artifacts/ 2>/dev/null || true
+          ls -la updater-artifacts/
+
+      - name: Collect updater artifacts (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          mkdir -p updater-artifacts
+          BUNDLE_DIR="src-tauri/target/release/bundle/appimage"
+          cp "$BUNDLE_DIR"/SkillReg*.AppImage.tar.gz updater-artifacts/ 2>/dev/null || true
+          cp "$BUNDLE_DIR"/SkillReg*.AppImage.tar.gz.sig updater-artifacts/ 2>/dev/null || true
+          ls -la updater-artifacts/
+
+      - name: Collect updater artifacts (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        run: |
+          mkdir -p updater-artifacts
+          BUNDLE_DIR="src-tauri/target/release/bundle/nsis"
+          cp "$BUNDLE_DIR"/*setup.nsis.zip updater-artifacts/ 2>/dev/null || true
+          cp "$BUNDLE_DIR"/*setup.nsis.zip.sig updater-artifacts/ 2>/dev/null || true
+          ls -la updater-artifacts/
+
+      - name: Upload updater artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: updater-${{ matrix.updater_platform }}
+          path: updater-artifacts/
+          if-no-files-found: warn
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all updater artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: updater-*
+          path: updater
+
+      - name: List all artifacts
+        run: find updater -type f | sort
+
+      - name: Generate latest.json and upload
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          BASE_URL="https://github.com/${GH_REPO}/releases/download/${TAG}"
+
+          PLATFORMS="{}"
+
+          # --- macOS aarch64 ---
+          SIG_FILE=$(find updater/updater-darwin-aarch64 -name "*.app.tar.gz.sig" 2>/dev/null | head -1)
+          if [ -n "$SIG_FILE" ]; then
+            SIG=$(cat "$SIG_FILE")
+            URL="${BASE_URL}/SkillReg_aarch64.app.tar.gz"
+            PLATFORMS=$(echo "$PLATFORMS" | jq --arg s "$SIG" --arg u "$URL" '. + {"darwin-aarch64": {"signature": $s, "url": $u}}')
+            echo "darwin-aarch64 OK"
+          fi
+
+          # --- macOS x86_64 ---
+          SIG_FILE=$(find updater/updater-darwin-x86_64 -name "*.app.tar.gz.sig" 2>/dev/null | head -1)
+          if [ -n "$SIG_FILE" ]; then
+            SIG=$(cat "$SIG_FILE")
+            URL="${BASE_URL}/SkillReg_x64.app.tar.gz"
+            PLATFORMS=$(echo "$PLATFORMS" | jq --arg s "$SIG" --arg u "$URL" '. + {"darwin-x86_64": {"signature": $s, "url": $u}}')
+            echo "darwin-x86_64 OK"
+          fi
+
+          # --- Linux x86_64 ---
+          SIG_FILE=$(find updater/updater-linux-x86_64 -name "*.AppImage.tar.gz.sig" 2>/dev/null | head -1)
+          if [ -n "$SIG_FILE" ]; then
+            SIG=$(cat "$SIG_FILE")
+            ARCHIVE="${SIG_FILE%.sig}"
+            ARCHIVE_NAME=$(basename "$ARCHIVE")
+            gh release upload "$TAG" "$ARCHIVE" --repo "$GH_REPO" --clobber || true
+            URL="${BASE_URL}/${ARCHIVE_NAME}"
+            PLATFORMS=$(echo "$PLATFORMS" | jq --arg s "$SIG" --arg u "$URL" '. + {"linux-x86_64": {"signature": $s, "url": $u}}')
+            echo "linux-x86_64 OK (uploaded ${ARCHIVE_NAME})"
+          fi
+
+          # --- Windows x86_64 ---
+          SIG_FILE=$(find updater/updater-windows-x86_64 -name "*.nsis.zip.sig" 2>/dev/null | head -1)
+          if [ -n "$SIG_FILE" ]; then
+            SIG=$(cat "$SIG_FILE")
+            ARCHIVE="${SIG_FILE%.sig}"
+            ARCHIVE_NAME=$(basename "$ARCHIVE")
+            gh release upload "$TAG" "$ARCHIVE" --repo "$GH_REPO" --clobber || true
+            URL="${BASE_URL}/${ARCHIVE_NAME}"
+            PLATFORMS=$(echo "$PLATFORMS" | jq --arg s "$SIG" --arg u "$URL" '. + {"windows-x86_64": {"signature": $s, "url": $u}}')
+            echo "windows-x86_64 OK (uploaded ${ARCHIVE_NAME})"
+          fi
+
+          # Generate latest.json
+          jq -n \
+            --arg v "$VERSION" \
+            --arg n "SkillReg v$VERSION" \
+            --arg d "$PUB_DATE" \
+            --argjson p "$PLATFORMS" \
+            '{version: $v, notes: $n, pub_date: $d, platforms: $p}' > latest.json
+
+          echo "=== latest.json ==="
+          cat latest.json
+
+          gh release upload "$TAG" latest.json --repo "$GH_REPO" --clobber
+          echo "latest.json uploaded to release ${TAG}"
