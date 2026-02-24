@@ -82,39 +82,28 @@ jobs:
           includeUpdaterJson: false
           args: ${{ matrix.args }}
 
-      - name: Collect updater artifacts (macOS)
-        if: startsWith(matrix.platform, 'macos')
-        run: |
-          mkdir -p updater-artifacts
-          BUNDLE_DIR="src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos"
-          cp "$BUNDLE_DIR"/*.app.tar.gz updater-artifacts/ 2>/dev/null || true
-          cp "$BUNDLE_DIR"/*.app.tar.gz.sig updater-artifacts/ 2>/dev/null || true
-          ls -la updater-artifacts/
-
-      - name: Collect updater artifacts (Linux)
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          mkdir -p updater-artifacts
-          BUNDLE_DIR="src-tauri/target/release/bundle/appimage"
-          cp "$BUNDLE_DIR"/SkillReg*.AppImage.tar.gz updater-artifacts/ 2>/dev/null || true
-          cp "$BUNDLE_DIR"/SkillReg*.AppImage.tar.gz.sig updater-artifacts/ 2>/dev/null || true
-          ls -la updater-artifacts/
-
-      - name: Collect updater artifacts (Windows)
-        if: matrix.platform == 'windows-latest'
+      - name: Collect updater artifacts
         shell: bash
         run: |
           mkdir -p updater-artifacts
-          BUNDLE_DIR="src-tauri/target/release/bundle/nsis"
-          cp "$BUNDLE_DIR"/*setup.nsis.zip updater-artifacts/ 2>/dev/null || true
-          cp "$BUNDLE_DIR"/*setup.nsis.zip.sig updater-artifacts/ 2>/dev/null || true
+          echo "=== Finding updater files ==="
+          echo "Working directory: $(pwd)"
+          find src-tauri/target -name "*.tar.gz" -o -name "*.tar.gz.sig" -o -name "*.nsis.zip" -o -name "*.nsis.zip.sig" 2>/dev/null | sort
+          echo "=== Copying ==="
+          find src-tauri/target -name "*.app.tar.gz" -exec cp {} updater-artifacts/ \; 2>/dev/null || true
+          find src-tauri/target -name "*.app.tar.gz.sig" -exec cp {} updater-artifacts/ \; 2>/dev/null || true
+          find src-tauri/target -name "*.AppImage.tar.gz" -path "*/SkillReg*" -exec cp {} updater-artifacts/ \; 2>/dev/null || true
+          find src-tauri/target -name "*.AppImage.tar.gz.sig" -path "*/SkillReg*" -exec cp {} updater-artifacts/ \; 2>/dev/null || true
+          find src-tauri/target -name "*setup.nsis.zip" -exec cp {} updater-artifacts/ \; 2>/dev/null || true
+          find src-tauri/target -name "*setup.nsis.zip.sig" -exec cp {} updater-artifacts/ \; 2>/dev/null || true
+          echo "=== Collected ==="
           ls -la updater-artifacts/
 
       - name: Upload updater artifacts
         uses: actions/upload-artifact@v4
         with:
           name: updater-${{ matrix.updater_platform }}
-          path: updater-artifacts/
+          path: updater-artifacts/*
           if-no-files-found: warn
 
   publish:
