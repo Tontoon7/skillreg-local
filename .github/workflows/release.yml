@@ -17,19 +17,19 @@ jobs:
           - platform: macos-latest
             args: '--target aarch64-apple-darwin'
             rust_target: aarch64-apple-darwin
-            updater_platform: darwin-aarch64
+            artifact_name: darwin-aarch64
           - platform: macos-latest
             args: '--target x86_64-apple-darwin'
             rust_target: x86_64-apple-darwin
-            updater_platform: darwin-x86_64
+            artifact_name: darwin-x86_64
           - platform: ubuntu-22.04
             args: ''
             rust_target: ''
-            updater_platform: linux-x86_64
+            artifact_name: linux-x86_64
           - platform: windows-latest
             args: ''
             rust_target: ''
-            updater_platform: windows-x86_64
+            artifact_name: windows-x86_64
 
     runs-on: ${{ matrix.platform }}
 
@@ -64,62 +64,71 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install
 
-      - name: Build Tauri
-        uses: tauri-apps/tauri-action@v0
+      - name: Setup Apple code signing
+        if: startsWith(matrix.platform, 'macos')
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        with:
-          tagName: v__VERSION__
-          releaseName: 'SkillReg v__VERSION__'
-          releaseBody: 'See the assets below for download links.'
-          releaseDraft: true
-          prerelease: false
-          args: ${{ matrix.args }}
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain
+          CERT_PATH=$RUNNER_TEMP/certificate.p12
 
-      - name: Collect updater artifacts
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "actions" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "actions" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "actions" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
+
+      - name: Build Tauri
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: npx tauri build ${{ matrix.args }}
+
+      - name: Collect artifacts
         shell: bash
         run: |
-          mkdir -p updater-artifacts
-          echo "=== Finding updater files ==="
-          echo "Working directory: $(pwd)"
-          find src-tauri/target -name "*.tar.gz" -o -name "*.tar.gz.sig" -o -name "*.nsis.zip" -o -name "*.nsis.zip.sig" 2>/dev/null | sort
-          echo "=== Copying ==="
-          find src-tauri/target -name "*.app.tar.gz" -exec cp {} updater-artifacts/ \; 2>/dev/null || true
-          find src-tauri/target -name "*.app.tar.gz.sig" -exec cp {} updater-artifacts/ \; 2>/dev/null || true
-          find src-tauri/target -name "*.AppImage.tar.gz" -path "*/SkillReg*" -exec cp {} updater-artifacts/ \; 2>/dev/null || true
-          find src-tauri/target -name "*.AppImage.tar.gz.sig" -path "*/SkillReg*" -exec cp {} updater-artifacts/ \; 2>/dev/null || true
-          find src-tauri/target -name "*setup.nsis.zip" -exec cp {} updater-artifacts/ \; 2>/dev/null || true
-          find src-tauri/target -name "*setup.nsis.zip.sig" -exec cp {} updater-artifacts/ \; 2>/dev/null || true
+          mkdir -p artifacts
+          echo "=== All bundle files ==="
+          find src-tauri/target -path "*/release/bundle/*" -type f \( \
+            -name "*.dmg" -o -name "*.app.tar.gz" -o -name "*.app.tar.gz.sig" \
+            -o -name "*.deb" -o -name "*.rpm" \
+            -o -name "*.AppImage" -o -name "*.AppImage.tar.gz" -o -name "*.AppImage.tar.gz.sig" \
+            -o -name "*.exe" -o -name "*.msi" \
+            -o -name "*.nsis.zip" -o -name "*.nsis.zip.sig" \
+          \) | while read f; do
+            echo "  $(basename "$f")"
+            cp "$f" artifacts/
+          done
           echo "=== Collected ==="
-          ls -la updater-artifacts/
+          ls -la artifacts/
 
-      - name: Upload updater artifacts
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: updater-${{ matrix.updater_platform }}
-          path: updater-artifacts/*
-          if-no-files-found: warn
+          name: build-${{ matrix.artifact_name }}
+          path: artifacts/*
 
   publish:
     needs: build
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download all updater artifacts
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: updater-*
-          path: updater
+          pattern: build-*
+          path: dist
 
       - name: List all artifacts
-        run: find updater -type f | sort
+        run: find dist -type f | sort
 
-      - name: Generate latest.json and upload
+      - name: Create release and generate latest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -129,51 +138,90 @@ jobs:
           PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           BASE_URL="https://github.com/${GH_REPO}/releases/download/${TAG}"
 
+          echo "Creating release ${TAG}"
+          gh release create "$TAG" \
+            --repo "$GH_REPO" \
+            --title "SkillReg v${VERSION}" \
+            --notes "See the assets below for download links." \
+            --draft
+
+          # Upload all release assets (exclude .sig files and updater archives)
+          echo "=== Uploading release assets ==="
+          find dist -type f \( -name "*.dmg" -o -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" -o -name "*.exe" -o -name "*.msi" \) | while read f; do
+            NAME=$(basename "$f")
+            echo "  Uploading $NAME"
+            gh release upload "$TAG" "$f" --repo "$GH_REPO" --clobber
+          done
+
+          # Upload updater archives (.app.tar.gz, .AppImage.tar.gz, .nsis.zip)
+          echo "=== Uploading updater archives ==="
+
+          # macOS aarch64 - rename to include arch
+          MACOS_ARM=$(find dist/build-darwin-aarch64 -name "*.app.tar.gz" ! -name "*.sig" 2>/dev/null | head -1)
+          if [ -n "$MACOS_ARM" ]; then
+            cp "$MACOS_ARM" "SkillReg_aarch64.app.tar.gz"
+            gh release upload "$TAG" "SkillReg_aarch64.app.tar.gz" --repo "$GH_REPO" --clobber
+            echo "  Uploaded SkillReg_aarch64.app.tar.gz"
+          fi
+
+          # macOS x86_64 - rename to include arch
+          MACOS_X64=$(find dist/build-darwin-x86_64 -name "*.app.tar.gz" ! -name "*.sig" 2>/dev/null | head -1)
+          if [ -n "$MACOS_X64" ]; then
+            cp "$MACOS_X64" "SkillReg_x64.app.tar.gz"
+            gh release upload "$TAG" "SkillReg_x64.app.tar.gz" --repo "$GH_REPO" --clobber
+            echo "  Uploaded SkillReg_x64.app.tar.gz"
+          fi
+
+          # Linux AppImage.tar.gz
+          LINUX_TAR=$(find dist/build-linux-x86_64 -name "*.AppImage.tar.gz" ! -name "*.sig" 2>/dev/null | head -1)
+          if [ -n "$LINUX_TAR" ]; then
+            gh release upload "$TAG" "$LINUX_TAR" --repo "$GH_REPO" --clobber
+            echo "  Uploaded $(basename "$LINUX_TAR")"
+          fi
+
+          # Windows nsis.zip
+          WIN_ZIP=$(find dist/build-windows-x86_64 -name "*.nsis.zip" ! -name "*.sig" 2>/dev/null | head -1)
+          if [ -n "$WIN_ZIP" ]; then
+            gh release upload "$TAG" "$WIN_ZIP" --repo "$GH_REPO" --clobber
+            echo "  Uploaded $(basename "$WIN_ZIP")"
+          fi
+
+          # === Generate latest.json ===
+          echo "=== Generating latest.json ==="
           PLATFORMS="{}"
 
-          # --- macOS aarch64 ---
-          SIG_FILE=$(find updater/updater-darwin-aarch64 -name "*.app.tar.gz.sig" 2>/dev/null | head -1)
-          if [ -n "$SIG_FILE" ]; then
-            SIG=$(cat "$SIG_FILE")
-            URL="${BASE_URL}/SkillReg_aarch64.app.tar.gz"
-            PLATFORMS=$(echo "$PLATFORMS" | jq --arg s "$SIG" --arg u "$URL" '. + {"darwin-aarch64": {"signature": $s, "url": $u}}')
-            echo "darwin-aarch64 OK"
+          # macOS aarch64
+          SIG=$(find dist/build-darwin-aarch64 -name "*.app.tar.gz.sig" 2>/dev/null | head -1)
+          if [ -n "$SIG" ]; then
+            PLATFORMS=$(echo "$PLATFORMS" | jq --arg s "$(cat "$SIG")" --arg u "${BASE_URL}/SkillReg_aarch64.app.tar.gz" \
+              '. + {"darwin-aarch64": {"signature": $s, "url": $u}}')
+            echo "  darwin-aarch64 OK"
           fi
 
-          # --- macOS x86_64 ---
-          SIG_FILE=$(find updater/updater-darwin-x86_64 -name "*.app.tar.gz.sig" 2>/dev/null | head -1)
-          if [ -n "$SIG_FILE" ]; then
-            SIG=$(cat "$SIG_FILE")
-            URL="${BASE_URL}/SkillReg_x64.app.tar.gz"
-            PLATFORMS=$(echo "$PLATFORMS" | jq --arg s "$SIG" --arg u "$URL" '. + {"darwin-x86_64": {"signature": $s, "url": $u}}')
-            echo "darwin-x86_64 OK"
+          # macOS x86_64
+          SIG=$(find dist/build-darwin-x86_64 -name "*.app.tar.gz.sig" 2>/dev/null | head -1)
+          if [ -n "$SIG" ]; then
+            PLATFORMS=$(echo "$PLATFORMS" | jq --arg s "$(cat "$SIG")" --arg u "${BASE_URL}/SkillReg_x64.app.tar.gz" \
+              '. + {"darwin-x86_64": {"signature": $s, "url": $u}}')
+            echo "  darwin-x86_64 OK"
           fi
 
-          # --- Linux x86_64 ---
-          SIG_FILE=$(find updater/updater-linux-x86_64 -name "*.AppImage.tar.gz.sig" 2>/dev/null | head -1)
-          if [ -n "$SIG_FILE" ]; then
-            SIG=$(cat "$SIG_FILE")
-            ARCHIVE="${SIG_FILE%.sig}"
-            ARCHIVE_NAME=$(basename "$ARCHIVE")
-            gh release upload "$TAG" "$ARCHIVE" --repo "$GH_REPO" --clobber || true
-            URL="${BASE_URL}/${ARCHIVE_NAME}"
-            PLATFORMS=$(echo "$PLATFORMS" | jq --arg s "$SIG" --arg u "$URL" '. + {"linux-x86_64": {"signature": $s, "url": $u}}')
-            echo "linux-x86_64 OK (uploaded ${ARCHIVE_NAME})"
+          # Linux
+          SIG=$(find dist/build-linux-x86_64 -name "*.AppImage.tar.gz.sig" 2>/dev/null | head -1)
+          if [ -n "$SIG" ] && [ -n "$LINUX_TAR" ]; then
+            PLATFORMS=$(echo "$PLATFORMS" | jq --arg s "$(cat "$SIG")" --arg u "${BASE_URL}/$(basename "$LINUX_TAR")" \
+              '. + {"linux-x86_64": {"signature": $s, "url": $u}}')
+            echo "  linux-x86_64 OK"
           fi
 
-          # --- Windows x86_64 ---
-          SIG_FILE=$(find updater/updater-windows-x86_64 -name "*.nsis.zip.sig" 2>/dev/null | head -1)
-          if [ -n "$SIG_FILE" ]; then
-            SIG=$(cat "$SIG_FILE")
-            ARCHIVE="${SIG_FILE%.sig}"
-            ARCHIVE_NAME=$(basename "$ARCHIVE")
-            gh release upload "$TAG" "$ARCHIVE" --repo "$GH_REPO" --clobber || true
-            URL="${BASE_URL}/${ARCHIVE_NAME}"
-            PLATFORMS=$(echo "$PLATFORMS" | jq --arg s "$SIG" --arg u "$URL" '. + {"windows-x86_64": {"signature": $s, "url": $u}}')
-            echo "windows-x86_64 OK (uploaded ${ARCHIVE_NAME})"
+          # Windows
+          SIG=$(find dist/build-windows-x86_64 -name "*.nsis.zip.sig" 2>/dev/null | head -1)
+          if [ -n "$SIG" ] && [ -n "$WIN_ZIP" ]; then
+            PLATFORMS=$(echo "$PLATFORMS" | jq --arg s "$(cat "$SIG")" --arg u "${BASE_URL}/$(basename "$WIN_ZIP")" \
+              '. + {"windows-x86_64": {"signature": $s, "url": $u}}')
+            echo "  windows-x86_64 OK"
           fi
 
-          # Generate latest.json
           jq -n \
             --arg v "$VERSION" \
             --arg n "SkillReg v$VERSION" \
@@ -185,4 +233,4 @@ jobs:
           cat latest.json
 
           gh release upload "$TAG" latest.json --repo "$GH_REPO" --clobber
-          echo "latest.json uploaded to release ${TAG}"
+          echo "latest.json uploaded to ${TAG}"
