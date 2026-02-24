@@ -10,7 +10,7 @@ export function Titlebar() {
 		return (
 			<div
 				data-tauri-drag-region
-				className="flex h-[38px] shrink-0 items-center border-b border-sidebar-border bg-sidebar select-none"
+				className="flex h-[38px] shrink-0 items-center brushed-metal channel-border-b select-none"
 			>
 				<div data-tauri-drag-region className="flex-1 pl-[78px]" />
 			</div>
@@ -21,21 +21,21 @@ export function Titlebar() {
 	return (
 		<div
 			data-tauri-drag-region
-			className="flex h-9 shrink-0 items-center justify-between border-b border-sidebar-border bg-sidebar select-none"
+			className="flex h-9 shrink-0 items-center justify-between brushed-metal channel-border-b select-none"
 		>
 			<div data-tauri-drag-region className="flex-1 pl-4" />
 			<div className="flex">
 				<button
 					type="button"
 					onClick={() => appWindow.minimize()}
-					className="inline-flex size-9 items-center justify-center text-muted-foreground transition-colors hover:bg-muted"
+					className="inline-flex size-9 items-center justify-center text-muted-foreground transition-colors hover:bg-secondary"
 				>
 					<Minus className="size-3.5" />
 				</button>
 				<button
 					type="button"
 					onClick={() => appWindow.toggleMaximize()}
-					className="inline-flex size-9 items-center justify-center text-muted-foreground transition-colors hover:bg-muted"
+					className="inline-flex size-9 items-center justify-center text-muted-foreground transition-colors hover:bg-secondary"
 				>
 					<Square className="size-3" />
 				</button>

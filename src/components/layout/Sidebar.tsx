@@ -16,28 +16,38 @@ export function Sidebar() {
 	const user = useAuthStore((s) => s.user);
 
 	return (
-		<aside className="flex h-full w-56 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
-			<div className="flex h-14 items-center gap-2 border-b border-sidebar-border px-4">
+		<aside className="flex h-full w-56 flex-col brushed-metal channel-border-r text-sidebar-foreground">
+			<div className="flex h-14 items-center gap-2 channel-border-b px-4">
 				<SkillRegLogo size={28} />
-				<span className="text-sm font-semibold">SkillReg</span>
+				<span className="text-sm font-semibold [font-family:'Chakra_Petch',sans-serif] tracking-wide">
+					SkillReg
+				</span>
 			</div>
 
 			<nav className="flex flex-1 flex-col gap-1 p-2">
+				<p className="text-[10px] uppercase tracking-widest font-semibold text-muted-foreground [font-family:'Chakra_Petch',sans-serif] px-3 py-2">
+					Navigation
+				</p>
 				{NAV_ITEMS.map((item) => (
 					<NavLink
 						key={item.to}
 						to={item.to}
 						className={({ isActive }) =>
 							cn(
-								"flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+								"flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-all",
 								isActive
-									? "bg-primary/10 text-primary"
-									: "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
+									? "panel-inset text-primary text-glow-amber border-l-2 border-l-primary"
+									: "text-secondary-foreground hover:bg-secondary",
 							)
 						}
 					>
-						<item.icon className="size-4" />
-						{item.label}
+						{({ isActive }) => (
+							<>
+								<span className={cn("led", isActive ? "led-amber" : "led-off")} />
+								<item.icon className="size-4" />
+								{item.label}
+							</>
+						)}
 					</NavLink>
 				))}
 			</nav>

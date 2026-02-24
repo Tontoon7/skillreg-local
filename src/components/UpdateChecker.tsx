@@ -1,5 +1,5 @@
-import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { check } from "@tauri-apps/plugin-updater";
 import { Download, RefreshCw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -79,7 +79,11 @@ export function UpdateChecker() {
 					>
 						Mettre à jour
 					</button>
-					<button type="button" onClick={() => setDismissed(true)} className="text-muted-foreground hover:text-foreground">
+					<button
+						type="button"
+						onClick={() => setDismissed(true)}
+						className="text-muted-foreground hover:text-foreground"
+					>
 						<X className="size-4" />
 					</button>
 				</>
@@ -90,7 +94,10 @@ export function UpdateChecker() {
 					<RefreshCw className="size-4 shrink-0 animate-spin text-primary" />
 					<span className="flex-1">Téléchargement en cours… {state.progress}%</span>
 					<div className="h-1.5 w-32 overflow-hidden rounded-full bg-muted">
-						<div className="h-full rounded-full bg-primary transition-all" style={{ width: `${state.progress}%` }} />
+						<div
+							className="h-full rounded-full bg-primary transition-all"
+							style={{ width: `${state.progress}%` }}
+						/>
 					</div>
 				</>
 			)}
@@ -113,7 +120,11 @@ export function UpdateChecker() {
 				<>
 					<X className="size-4 shrink-0 text-destructive" />
 					<span className="flex-1 text-destructive">Erreur : {state.message}</span>
-					<button type="button" onClick={() => setDismissed(true)} className="text-muted-foreground hover:text-foreground">
+					<button
+						type="button"
+						onClick={() => setDismissed(true)}
+						className="text-muted-foreground hover:text-foreground"
+					>
 						<X className="size-4" />
 					</button>
 				</>

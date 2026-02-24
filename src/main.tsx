@@ -12,12 +12,6 @@ window.addEventListener("unhandledrejection", (e) => {
 	console.error("[UNHANDLED REJECTION]", e.reason);
 });
 
-// Restore theme preference
-const savedTheme = localStorage.getItem("skillreg-theme");
-if (savedTheme === "light") {
-	document.documentElement.classList.add("light");
-}
-
 // biome-ignore lint/style/noNonNullAssertion: root element always exists
 createRoot(document.getElementById("root")!).render(
 	<StrictMode>

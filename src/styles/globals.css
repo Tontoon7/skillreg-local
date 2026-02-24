@@ -1,32 +1,36 @@
 @import "tailwindcss";
 
 @theme {
-	--color-background: #0a0a0f;
-	--color-foreground: #f8fafc;
-	--color-card: #1e1e2e;
-	--color-card-foreground: #f8fafc;
-	--color-popover: #1e1e2e;
-	--color-popover-foreground: #f8fafc;
-	--color-primary: #4f46e5;
-	--color-primary-foreground: #ffffff;
-	--color-secondary: #1e293b;
-	--color-secondary-foreground: #f8fafc;
-	--color-muted: #1e293b;
-	--color-muted-foreground: #94a3b8;
-	--color-accent: #10b981;
-	--color-accent-foreground: #ffffff;
+	--color-background: #060b16;
+	--color-foreground: #e4e9f0;
+	--color-card: #0c1326;
+	--color-card-foreground: #edf1f7;
+	--color-popover: #0c1326;
+	--color-popover-foreground: #edf1f7;
+	--color-primary: #e5a033;
+	--color-primary-foreground: #0a0600;
+	--color-secondary: #162240;
+	--color-secondary-foreground: #a8b5c8;
+	--color-muted: #131d34;
+	--color-muted-foreground: #7e90a8;
+	--color-accent: #22d3ee;
+	--color-accent-foreground: #060b16;
 	--color-destructive: #ef4444;
-	--color-border: #1e293b;
-	--color-input: #1e293b;
-	--color-ring: #4f46e5;
-	--color-sidebar: #0d0d14;
-	--color-sidebar-foreground: #f8fafc;
-	--color-sidebar-border: #1e293b;
-	--color-sidebar-accent: #1e293b;
-	--color-sidebar-accent-foreground: #f8fafc;
-	--color-sidebar-ring: #4f46e5;
-	--color-surface: #1e1e2e;
+	--color-border: #1e2f50;
+	--color-input: #0e1628;
+	--color-ring: #e5a033;
+	--color-surface: #101b30;
+	--color-sidebar: #0a1020;
+	--color-sidebar-foreground: #e4e9f0;
+	--color-sidebar-border: #1e2f50;
+	--color-sidebar-accent: #162240;
+	--color-sidebar-accent-foreground: #e4e9f0;
+	--color-sidebar-ring: #e5a033;
 	--radius: 0.625rem;
+	--glow-amber: rgba(229, 160, 51, 0.5);
+	--glow-cyan: rgba(34, 211, 238, 0.4);
+	--glow-red: rgba(239, 68, 68, 0.45);
+	--font-display: "Chakra Petch", sans-serif;
 }
 
 @layer base {
@@ -38,32 +42,15 @@
 		font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 	}
 
-	.light {
-		--color-background: #ffffff;
-		--color-foreground: #0f172a;
-		--color-card: #f8fafc;
-		--color-card-foreground: #0f172a;
-		--color-popover: #ffffff;
-		--color-popover-foreground: #0f172a;
-		--color-primary: #4f46e5;
-		--color-primary-foreground: #ffffff;
-		--color-secondary: #f1f5f9;
-		--color-secondary-foreground: #0f172a;
-		--color-muted: #f1f5f9;
-		--color-muted-foreground: #64748b;
-		--color-accent: #10b981;
-		--color-accent-foreground: #ffffff;
-		--color-destructive: #ef4444;
-		--color-border: #e2e8f0;
-		--color-input: #e2e8f0;
-		--color-ring: #4f46e5;
-		--color-sidebar: #f8fafc;
-		--color-sidebar-foreground: #0f172a;
-		--color-sidebar-border: #e2e8f0;
-		--color-sidebar-accent: #f1f5f9;
-		--color-sidebar-accent-foreground: #0f172a;
-		--color-sidebar-ring: #4f46e5;
-		--color-surface: #f1f5f9;
+	h1,
+	h2,
+	h3 {
+		font-family: "Chakra Petch", sans-serif;
+		letter-spacing: 0.02em;
+	}
+	h1 {
+		text-shadow: 0 0 30px rgba(229, 160, 51, 0.12);
+		color: #f2f5fa;
 	}
 
 	/* Markdown prose styling */
@@ -78,10 +65,13 @@
 	.prose h1 {
 		font-size: 1.5rem;
 		font-weight: 700;
-		color: var(--color-foreground);
+		color: #f2f5fa;
 		margin-top: 1.5em;
 		margin-bottom: 0.5em;
 		line-height: 1.3;
+		font-family: "Chakra Petch", sans-serif;
+		letter-spacing: 0.02em;
+		text-shadow: 0 0 30px rgba(229, 160, 51, 0.12);
 	}
 	.prose h2 {
 		font-size: 1.25rem;
@@ -92,6 +82,8 @@
 		line-height: 1.3;
 		padding-bottom: 0.25em;
 		border-bottom: 1px solid var(--color-border);
+		font-family: "Chakra Petch", sans-serif;
+		letter-spacing: 0.02em;
 	}
 	.prose h3 {
 		font-size: 1.1rem;
@@ -100,6 +92,8 @@
 		margin-top: 1.25em;
 		margin-bottom: 0.5em;
 		line-height: 1.4;
+		font-family: "Chakra Petch", sans-serif;
+		letter-spacing: 0.02em;
 	}
 	.prose h4 {
 		font-size: 1rem;
@@ -204,4 +198,187 @@
 	.prose > :first-child {
 		margin-top: 0;
 	}
+}
+
+/* === Skeuomorphic Utility Classes === */
+
+.panel-inset {
+	background: var(--color-card);
+	border: 1px solid var(--color-border);
+	box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.6), inset 0 0 16px rgba(0, 0, 0, 0.25), 0 1px 0
+		rgba(255, 255, 255, 0.04);
+}
+
+.panel-raised {
+	background: linear-gradient(180deg, #182844 0%, #101d35 100%);
+	border: 1px solid #243a5c;
+	box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04) inset, 0 1px 0
+		rgba(255, 255, 255, 0.08) inset;
+}
+
+.brushed-metal {
+	background: repeating-linear-gradient(
+			90deg,
+			transparent,
+			transparent 2px,
+			rgba(255, 255, 255, 0.012) 2px,
+			rgba(255, 255, 255, 0.012) 4px
+		), linear-gradient(180deg, #101b32 0%, #0b1324 100%);
+}
+
+.channel-border-b {
+	border-bottom: 1px solid var(--color-border);
+	box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.channel-border-r {
+	border-right: 1px solid var(--color-border);
+	box-shadow: 1px 0 0 rgba(255, 255, 255, 0.05);
+}
+
+/* === LED Indicators === */
+
+.led {
+	display: inline-block;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	flex-shrink: 0;
+}
+
+.led-amber {
+	background: var(--color-primary);
+	box-shadow: 0 0 4px var(--glow-amber), 0 0 8px var(--glow-amber);
+}
+
+.led-cyan {
+	background: var(--color-accent);
+	box-shadow: 0 0 4px var(--glow-cyan), 0 0 8px var(--glow-cyan);
+}
+
+.led-red {
+	background: var(--color-destructive);
+	box-shadow: 0 0 4px var(--glow-red), 0 0 8px var(--glow-red);
+}
+
+.led-off {
+	background: #1e3050;
+	box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+/* === Glow Effects === */
+
+.glow-amber {
+	box-shadow: 0 0 8px var(--glow-amber), 0 0 20px rgba(212, 148, 58, 0.15);
+}
+
+.glow-cyan {
+	box-shadow: 0 0 8px var(--glow-cyan), 0 0 20px rgba(56, 189, 248, 0.1);
+}
+
+.text-glow-amber {
+	text-shadow: 0 0 8px var(--glow-amber);
+}
+
+.text-glow-cyan {
+	text-shadow: 0 0 8px var(--glow-cyan);
+}
+
+/* === Animations === */
+
+@keyframes pulse-glow {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.6;
+	}
+}
+
+@keyframes flicker-in {
+	0% {
+		opacity: 0;
+		filter: brightness(2);
+	}
+	50% {
+		opacity: 0.8;
+		filter: brightness(1.5);
+	}
+	100% {
+		opacity: 1;
+		filter: brightness(1);
+	}
+}
+
+.animate-pulse-glow {
+	animation: pulse-glow 2s ease-in-out infinite;
+}
+
+.animate-flicker-in {
+	animation: flicker-in 0.3s ease-out;
+}
+
+/* === Gauge / Progress === */
+
+.gauge-track {
+	background: var(--color-muted);
+	border-radius: 2px;
+	box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4);
+	height: 4px;
+}
+
+.gauge-fill-amber {
+	background: linear-gradient(90deg, #b8792a, var(--color-primary));
+	box-shadow: 0 0 6px var(--glow-amber);
+}
+
+.gauge-fill-cyan {
+	background: linear-gradient(90deg, #0284c7, var(--color-accent));
+	box-shadow: 0 0 6px var(--glow-cyan);
+}
+
+/* === Scrollbar === */
+
+::-webkit-scrollbar {
+	width: 6px;
+	height: 6px;
+}
+
+::-webkit-scrollbar-track {
+	background: var(--color-background);
+}
+
+::-webkit-scrollbar-thumb {
+	background: var(--color-border);
+	border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+	background: var(--color-muted-foreground);
+}
+
+/* === Scanlines === */
+
+.scanlines::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	background: repeating-linear-gradient(
+		0deg,
+		transparent,
+		transparent 2px,
+		rgba(0, 0, 0, 0.06) 2px,
+		rgba(0, 0, 0, 0.06) 4px
+	);
+	pointer-events: none;
+	z-index: 1;
+	border-radius: inherit;
+}
+
+/* === Font Display === */
+
+.font-display {
+	font-family: "Chakra Petch", sans-serif;
+	letter-spacing: 0.02em;
 }
