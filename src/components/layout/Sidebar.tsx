@@ -54,9 +54,8 @@ export function Sidebar() {
 
 			<div className="border-t border-sidebar-border p-4">
 				{user?.user.email && (
-					<p className="text-xs text-muted-foreground truncate mb-1">{user.user.email}</p>
+					<p className="text-xs text-muted-foreground truncate">{user.user.email}</p>
 				)}
-				<p className="text-xs text-muted-foreground/60">SkillReg Local v0.1.0</p>
 			</div>
 		</aside>
 	);
