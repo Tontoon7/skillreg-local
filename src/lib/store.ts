@@ -30,7 +30,10 @@ export const useAuthStore = create<AuthState>((set) => ({
 		}
 	},
 
-	setAuthenticated: (user) => set({ authenticated: true, loading: false, user }),
+	setAuthenticated: (user) => {
+		set({ authenticated: true, loading: false, user });
+		useConfigStore.getState().load();
+	},
 
 	logout: async () => {
 		await logout();
@@ -57,7 +60,8 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
 	},
 
 	update: async (updates) => {
-		const merged = { ...get().config, ...updates };
+		const fresh = await readConfig();
+		const merged = { ...fresh, ...updates };
 		await writeConfig(merged);
 		set({ config: merged });
 	},
