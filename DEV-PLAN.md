@@ -605,7 +605,7 @@ open = "5"                         # Ouvrir URL dans le navigateur
 - [ ] Notifications OS (install success, update available)
 - [x] Packaging config : `.dmg` (macOS), `.msi` (Windows), `.AppImage` (Linux)
 - [x] GitHub Actions CI/CD : build cross-platform
-- [ ] Code signing (nécessite certificats Apple + Microsoft)
+- [x] Releases macOS signées + notarized en CI (nécessite secrets Apple GitHub)
 - [ ] Page de téléchargement sur skillreg.dev
 
 ---

@@ -155,10 +155,9 @@ src/
 - **Phase 3** : ✅ terminée (catalog, search, pagination, skill detail, pull/install, agent/scope picker)
 - **Phase 4** : ✅ terminée (installed page, scan local, updates, uninstall, publish, push, dry-run)
 - **Phase 5** : ✅ terminée (env vars CRUD, import .env, masquage, settings, thème clair/sombre)
-- **Phase 6** : ✅ ~90% (tray icon, icônes app, CI/CD, titlebar — reste : notifications OS, code signing)
+- **Phase 6** : ✅ ~95% (tray icon, icônes app, CI/CD, titlebar, signature/notarization macOS release — reste : page de téléchargement)
 
 ## Reste à faire
 
-- Notifications OS (nécessite `tauri-plugin-notification`)
-- Code signing (nécessite certificats Apple/Microsoft)
+- Releases macOS: secrets GitHub requis pour signature + notarization (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`)
 - Page de téléchargement sur skillreg.dev

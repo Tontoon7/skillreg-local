@@ -82,13 +82,75 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "actions" "$KEYCHAIN_PATH"
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
 
+      - name: Setup Apple notarization
+        if: startsWith(matrix.platform, 'macos')
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$APPLE_ID" ] || [ -z "$APPLE_PASSWORD" ] || [ -z "$APPLE_TEAM_ID" ]; then
+            echo "Missing Apple notarization secrets. Configure APPLE_ID, APPLE_PASSWORD, and APPLE_TEAM_ID." >&2
+            exit 1
+          fi
+
       - name: Build Tauri
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npx tauri build ${{ matrix.args }}
+
+      - name: Validate notarized macOS app bundles
+        if: startsWith(matrix.platform, 'macos')
+        shell: bash
+        run: |
+          apps_found=0
+
+          while IFS= read -r app; do
+            [ -n "$app" ] || continue
+            apps_found=$((apps_found + 1))
+
+            echo "Validating $app"
+            codesign -dv --verbose=4 "$app"
+            spctl -a -vv "$app"
+            xcrun stapler validate "$app"
+          done < <(find src-tauri/target -path "*/release/bundle/macos/*.app" -type d)
+
+          if [ "$apps_found" -eq 0 ]; then
+            echo "No macOS app bundle found to validate." >&2
+            exit 1
+          fi
+
+      - name: Notarize and staple macOS DMGs
+        if: startsWith(matrix.platform, 'macos')
+        shell: bash
+        run: |
+          dmgs_found=0
+
+          while IFS= read -r dmg; do
+            [ -n "$dmg" ] || continue
+            dmgs_found=$((dmgs_found + 1))
+
+            echo "Submitting $dmg for notarization"
+            xcrun notarytool submit "$dmg" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              --wait
+
+            xcrun stapler staple "$dmg"
+            xcrun stapler validate "$dmg"
+          done < <(find src-tauri/target -path "*/release/bundle/dmg/*.dmg" -type f)
+
+          if [ "$dmgs_found" -eq 0 ]; then
+            echo "No macOS DMG found to notarize." >&2
+            exit 1
+          fi
 
       - name: Collect artifacts
         shell: bash

@@ -92,5 +92,5 @@
 - [x] Notifications OS
 - [x] Packaging (.dmg, .msi, .AppImage) — config prête
 - [x] CI/CD GitHub Actions
-- [x] ~~Code signing~~ — reporté (budget), distribution unsigned
+- [x] Releases macOS signées + notarized en CI (requiert secrets Apple GitHub)
 - [ ] Page téléchargement skillreg.dev
