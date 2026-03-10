@@ -89,8 +89,8 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          if [ -z "$APPLE_ID" ] || [ -z "$APPLE_PASSWORD" ] || [ -z "$APPLE_TEAM_ID" ]; then
-            echo "Missing Apple notarization secrets. Configure APPLE_ID, APPLE_PASSWORD, and APPLE_TEAM_ID." >&2
+          if [ -z "$APPLE_ID" ] || [ -z "$APPLE_PASSWORD" ]; then
+            echo "Missing Apple notarization secrets. Configure APPLE_ID and APPLE_PASSWORD." >&2
             exit 1
           fi
 
@@ -131,17 +131,18 @@ jobs:
         shell: bash
         run: |
           dmgs_found=0
+          notary_args=(--apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --wait)
+
+          if [ "${#APPLE_TEAM_ID}" -ge 3 ]; then
+            notary_args+=(--team-id "$APPLE_TEAM_ID")
+          fi
 
           while IFS= read -r dmg; do
             [ -n "$dmg" ] || continue
             dmgs_found=$((dmgs_found + 1))
 
             echo "Submitting $dmg for notarization"
-            xcrun notarytool submit "$dmg" \
-              --apple-id "$APPLE_ID" \
-              --password "$APPLE_PASSWORD" \
-              --team-id "$APPLE_TEAM_ID" \
-              --wait
+            xcrun notarytool submit "$dmg" "${notary_args[@]}"
 
             xcrun stapler staple "$dmg"
             xcrun stapler validate "$dmg"

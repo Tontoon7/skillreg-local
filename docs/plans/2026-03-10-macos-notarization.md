@@ -19,7 +19,8 @@
 **Step 1: Write the failing test**
 
 Create a shell check that asserts the release workflow contains:
-- Apple notarization credential wiring with `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID`
+- Apple notarization credential wiring with `APPLE_ID` and `APPLE_PASSWORD`
+- optional `APPLE_TEAM_ID` support
 - `xcrun notarytool submit`
 - `xcrun stapler staple`
 - `xcrun stapler validate`
@@ -40,7 +41,8 @@ Expected: FAIL because the current workflow signs macOS artifacts but does not c
 Add a macOS-only step that validates the required secrets exist:
 - `APPLE_ID`
 - `APPLE_PASSWORD`
-- `APPLE_TEAM_ID`
+
+Accept `APPLE_TEAM_ID` as optional and pass it only when it is populated with a valid Developer Team ID.
 
 **Step 2: Keep Tauri app notarization enabled**
 
@@ -74,7 +76,7 @@ Note the macOS release prerequisites:
 - `APPLE_SIGNING_IDENTITY`
 - `APPLE_ID`
 - `APPLE_PASSWORD`
-- `APPLE_TEAM_ID`
+- `APPLE_TEAM_ID` (optional)
 
 ### Task 4: Verify end to end
 

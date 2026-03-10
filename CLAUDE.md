@@ -159,5 +159,5 @@ src/
 
 ## Reste à faire
 
-- Releases macOS: secrets GitHub requis pour signature + notarization (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`)
+- Releases macOS: secrets GitHub requis pour signature + notarization (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` optionnel si `notarytool` en a besoin)
 - Page de téléchargement sur skillreg.dev
