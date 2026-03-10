@@ -128,14 +128,19 @@ jobs:
 
       - name: Notarize and staple macOS DMGs
         if: startsWith(matrix.platform, 'macos')
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         shell: bash
         run: |
           dmgs_found=0
-          notary_args=(--apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --wait)
-
-          if [ "${#APPLE_TEAM_ID}" -ge 3 ]; then
-            notary_args+=(--team-id "$APPLE_TEAM_ID")
+          team_id="${APPLE_TEAM_ID:-2PYK5649R3}"
+          if [ -z "$APPLE_ID" ] || [ -z "$APPLE_PASSWORD" ]; then
+            echo "Missing Apple notarization secrets in DMG step." >&2
+            exit 1
           fi
+          notary_args=(--apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$team_id" --wait)
 
           while IFS= read -r dmg; do
             [ -n "$dmg" ] || continue

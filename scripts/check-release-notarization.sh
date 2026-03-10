@@ -20,7 +20,8 @@ assert_contains() {
 
 assert_contains "APPLE_ID"
 assert_contains "APPLE_PASSWORD"
-assert_contains 'if [ "${#APPLE_TEAM_ID}" -ge 3 ]'
+assert_contains "team_id=\"\${APPLE_TEAM_ID:-2PYK5649R3}\""
+assert_contains "Missing Apple notarization secrets in DMG step."
 assert_contains "xcrun notarytool submit"
 assert_contains "xcrun stapler staple"
 assert_contains "xcrun stapler validate"
