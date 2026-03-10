@@ -1,12 +1,19 @@
-import { PublishDialog } from "@/components/PublishDialog";
+import { ProposeDialog } from "@/components/ProposeDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { checkUpdates, listSkills, pullSkill, scanLocalSkills, uninstallSkill } from "@/lib/api";
+import {
+	checkUpdates,
+	listSkillProposals,
+	listSkills,
+	pullSkill,
+	scanLocalSkills,
+	uninstallSkill,
+} from "@/lib/api";
 import { notify } from "@/lib/notifications";
 import { useConfigStore } from "@/lib/store";
 import { tagStyle } from "@/lib/tag-colors";
-import type { LocalSkill, SyncStatus, UpdateInfo } from "@/lib/types";
+import type { LocalSkill, ProposalSummary, SyncStatus, UpdateInfo } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
 	ArrowUpCircle,
@@ -19,14 +26,14 @@ import {
 	RefreshCw,
 	Search,
 	Trash2,
-	Upload,
+	Send,
 	X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-function timeAgo(unixSeconds: string): string {
+function timeAgo(value: string): string {
 	const now = Date.now();
-	const then = Number(unixSeconds) * 1000;
+	const then = /^\d+$/.test(value) ? Number(value) * 1000 : new Date(value).getTime();
 	const diff = now - then;
 	const minutes = Math.floor(diff / 60000);
 	if (minutes < 1) return "just now";
@@ -102,10 +109,11 @@ export function Installed() {
 	const [skills, setSkills] = useState<LocalSkill[]>([]);
 	const [updates, setUpdates] = useState<UpdateInfo[]>([]);
 	const [registryNames, setRegistryNames] = useState<Set<string>>(new Set());
+	const [recentProposals, setRecentProposals] = useState<Record<string, ProposalSummary[]>>({});
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
 	const [actionLoading, setActionLoading] = useState<string | null>(null);
-	const [publishSkill, setPublishSkill] = useState<LocalSkill | null>(null);
+	const [proposeSkill, setProposeSkill] = useState<LocalSkill | null>(null);
 
 	const [search, setSearch] = useState("");
 	const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -132,6 +140,20 @@ export function Installed() {
 				if (catalogResult.status === "fulfilled") {
 					setRegistryNames(new Set(catalogResult.value.skills.map((s) => s.name.toLowerCase())));
 				}
+
+				const proposalResults = await Promise.allSettled(
+					result.map(async (skill) => ({
+						skillName: skill.name,
+						proposals: await listSkillProposals(org, skill.name),
+					})),
+				);
+				const nextProposals: Record<string, ProposalSummary[]> = {};
+				for (const item of proposalResults) {
+					if (item.status === "fulfilled") {
+						nextProposals[item.value.skillName] = item.value.proposals.slice(0, 3);
+					}
+				}
+				setRecentProposals(nextProposals);
 			}
 		} catch (e) {
 			setError(typeof e === "string" ? e : "Failed to scan local skills");
@@ -251,6 +273,21 @@ export function Installed() {
 		updates.find(
 			(u) => u.name === skill.name && u.agent === skill.agent && u.scope === skill.scope,
 		);
+
+	const getProposalTone = (status: ProposalSummary["status"]) => {
+		switch (status) {
+			case "published":
+				return "text-emerald-400 border-emerald-500/20 bg-emerald-500/10";
+			case "rejected":
+				return "text-red-400 border-red-500/20 bg-red-500/10";
+			case "selected":
+				return "text-sky-400 border-sky-500/20 bg-sky-500/10";
+			case "needs_update":
+				return "text-amber-400 border-amber-500/20 bg-amber-500/10";
+			default:
+				return "text-muted-foreground border-border bg-muted/40";
+		}
+	};
 
 	if (loading) {
 		return (
@@ -409,9 +446,9 @@ export function Installed() {
 													{skill.description}
 												</p>
 											)}
-											<div className="flex items-center gap-2 flex-wrap">
-												{skill.tags.length > 0 && (
-													<div className="flex flex-wrap gap-1">
+										<div className="flex items-center gap-2 flex-wrap">
+											{skill.tags.length > 0 && (
+												<div className="flex flex-wrap gap-1">
 														{skill.tags.slice(0, 4).map((tag) => (
 															<span
 																key={tag}
@@ -435,6 +472,27 @@ export function Installed() {
 													)}
 												</span>
 											</div>
+											{recentProposals[skill.name] && recentProposals[skill.name].length > 0 && (
+												<div className="flex flex-wrap items-center gap-2 pt-1">
+													<span className="text-[11px] uppercase tracking-wide text-muted-foreground/60">
+														Recent proposals
+													</span>
+													{recentProposals[skill.name].map((proposal) => (
+														<span
+															key={proposal.id}
+															className={cn(
+																"inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium",
+																getProposalTone(proposal.status),
+															)}
+														>
+															{proposal.title}
+															<span className="opacity-70">
+																· {timeAgo(proposal.createdAt)}
+															</span>
+														</span>
+													))}
+												</div>
+											)}
 										</div>
 
 										<div className="flex items-center gap-2 shrink-0">
@@ -459,9 +517,10 @@ export function Installed() {
 													variant="outline"
 													size="sm"
 													disabled={isLoading}
-													onClick={() => setPublishSkill(skill)}
+													onClick={() => setProposeSkill(skill)}
 												>
-													<Upload className="size-3.5" />
+													<Send className="size-3.5" />
+													Propose
 												</Button>
 											)}
 											<Button
@@ -503,14 +562,21 @@ export function Installed() {
 				</>
 			)}
 
-			{publishSkill && org && (
-				<PublishDialog
-					skill={publishSkill}
+			{proposeSkill && org && (
+				<ProposeDialog
+					skill={proposeSkill}
 					org={org}
-					onClose={() => setPublishSkill(null)}
-					onPublished={() => {
-						setPublishSkill(null);
-						load();
+					onClose={() => setProposeSkill(null)}
+					onSubmitted={(proposal) => {
+						const skillName = proposeSkill.name;
+						setProposeSkill(null);
+						setRecentProposals((prev) => ({
+							...prev,
+							[skillName]: [
+								proposal,
+								...(prev[skillName] || []).filter((item) => item.id !== proposal.id),
+							].slice(0, 3),
+						}));
 					}}
 				/>
 			)}

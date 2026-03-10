@@ -132,6 +132,32 @@ export interface UpdateInfo {
 	scope: string;
 }
 
+export interface ProposalActor {
+	id: string;
+	name: string | null;
+	email: string | null;
+}
+
+export interface ProposalSummary {
+	id: string;
+	skillId: string;
+	title: string;
+	intent: string;
+	baseVersion: string;
+	status: "open" | "selected" | "rejected" | "published" | "needs_update" | string;
+	createdAt: string;
+	updatedAt: string;
+	createdBy: ProposalActor;
+	reviewedAt: string | null;
+	reviewedBy: ProposalActor | null;
+	rejectionReason: string | null;
+	publishedVersion: string | null;
+}
+
+export interface ProposalDetail extends ProposalSummary {
+	skillMdContent: string;
+}
+
 // Local skills
 export interface LocalSkill {
 	name: string;

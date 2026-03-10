@@ -5,6 +5,8 @@ import type {
 	LocalSkill,
 	PaginatedSkills,
 	PollResponse,
+	ProposalDetail,
+	ProposalSummary,
 	PushResult,
 	SearchResponse,
 	SkillDetail,
@@ -56,6 +58,19 @@ export const pushSkill = (params: {
 	tag?: string;
 	dryRun: boolean;
 }) => invoke<PushResult>("push_skill", params);
+
+export const proposeSkillChange = (params: {
+	org: string;
+	dirPath: string;
+	title: string;
+	intent: string;
+}) => invoke<ProposalSummary>("propose_skill_change", params);
+
+export const listSkillProposals = (org: string, name: string) =>
+	invoke<ProposalSummary[]>("list_skill_proposals", { org, name });
+
+export const getSkillProposal = (org: string, name: string, proposalId: string) =>
+	invoke<ProposalDetail>("get_skill_proposal", { org, name, proposalId });
 
 export const uninstallSkill = (name: string, agent: string, scope: string, projectDir?: string) =>
 	invoke<boolean>("uninstall_skill", { name, agent, scope, projectDir });
