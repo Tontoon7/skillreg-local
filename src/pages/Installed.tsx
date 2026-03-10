@@ -25,8 +25,8 @@ import {
 	Loader2,
 	RefreshCw,
 	Search,
-	Trash2,
 	Send,
+	Trash2,
 	X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -446,9 +446,9 @@ export function Installed() {
 													{skill.description}
 												</p>
 											)}
-										<div className="flex items-center gap-2 flex-wrap">
-											{skill.tags.length > 0 && (
-												<div className="flex flex-wrap gap-1">
+											<div className="flex items-center gap-2 flex-wrap">
+												{skill.tags.length > 0 && (
+													<div className="flex flex-wrap gap-1">
 														{skill.tags.slice(0, 4).map((tag) => (
 															<span
 																key={tag}
@@ -486,9 +486,7 @@ export function Installed() {
 															)}
 														>
 															{proposal.title}
-															<span className="opacity-70">
-																· {timeAgo(proposal.createdAt)}
-															</span>
+															<span className="opacity-70">· {timeAgo(proposal.createdAt)}</span>
 														</span>
 													))}
 												</div>

@@ -117,11 +117,7 @@ export function ProposeDialog({ skill, org, onClose, onSubmitted }: ProposeDialo
 						onClick={handleSubmit}
 						disabled={loading || title.trim().length < 3 || intent.trim().length < 3}
 					>
-						{loading ? (
-							<Loader2 className="size-4 animate-spin" />
-						) : (
-							<Send className="size-4" />
-						)}
+						{loading ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
 						Submit proposal
 					</Button>
 				</div>
