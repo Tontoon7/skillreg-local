@@ -1,5 +1,6 @@
 use super::config::read_config;
 use super::local::parse_frontmatter_pub;
+use super::skills::SkillDetail;
 use reqwest::header::CONTENT_TYPE;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -61,6 +62,47 @@ fn get_auth_client() -> Result<(reqwest::Client, String), String> {
     Ok((reqwest::Client::new(), token))
 }
 
+fn extract_version_from_frontmatter(skill_md: &str) -> Option<String> {
+    let frontmatter = parse_frontmatter_pub(skill_md);
+    frontmatter
+        .get("version")
+        .or_else(|| frontmatter.get("metadata.version"))
+        .cloned()
+}
+
+async fn load_current_official_version(
+    client: &reqwest::Client,
+    token: &str,
+    org: &str,
+    skill_name: &str,
+) -> Result<String, String> {
+    let resp = client
+        .get(format!(
+            "{}/api/v1/orgs/{}/skills/{}",
+            API_BASE_URL, org, skill_name
+        ))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Skill lookup failed {}: {}", status, body));
+    }
+
+    let detail = resp
+        .json::<SkillDetail>()
+        .await
+        .map_err(|e| format!("Parse error: {}", e))?;
+
+    detail
+        .base
+        .latest_version
+        .ok_or_else(|| "Publish this skill before proposing changes.".to_string())
+}
+
 #[tauri::command]
 pub async fn propose_skill_change(
     org: String,
@@ -86,17 +128,16 @@ pub async fn propose_skill_change(
         .get("name")
         .cloned()
         .ok_or("Missing 'name' in SKILL.md frontmatter")?;
-    let base_version = frontmatter
-        .get("version")
-        .or_else(|| frontmatter.get("metadata.version"))
-        .cloned()
-        .ok_or("SKILL.md must keep the current official version for proposals")?;
+    let base_version = match extract_version_from_frontmatter(&skill_md_content) {
+        Some(version) => version,
+        None => load_current_official_version(&client, &token, &org, &skill_name).await?,
+    };
 
     let payload = ProposalPayload {
         title,
         intent,
         base_version,
-        skill_md_content: skill_md_content,
+        skill_md_content,
     };
 
     let resp = client
@@ -176,4 +217,19 @@ pub async fn get_skill_proposal(
     resp.json::<ProposalDetail>()
         .await
         .map_err(|e| format!("Parse error: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_version_from_frontmatter;
+
+    #[test]
+    fn extracts_metadata_version() {
+        let content = "---\nname: sync\nmetadata:\n  version: \"1.2.3\"\n---\n# Sync\n";
+
+        assert_eq!(
+            extract_version_from_frontmatter(content),
+            Some("1.2.3".to_string())
+        );
+    }
 }

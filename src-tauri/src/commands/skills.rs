@@ -639,7 +639,7 @@ pub async fn push_skill(
         .ok_or("No version specified")?;
 
     // Create tarball in memory
-    let tarball = create_tarball(dir)?;
+    let tarball = create_tarball(dir, &skill_version)?;
     let size = tarball.len() as u64;
 
     // Compute SHA256
@@ -696,7 +696,39 @@ pub async fn push_skill(
     })
 }
 
-fn create_tarball(dir: &Path) -> Result<Vec<u8>, String> {
+fn ensure_skill_md_version(content: &str, version: &str) -> String {
+    let Some(rest) = content.strip_prefix("---\n") else {
+        return content.to_string();
+    };
+    let Some(fm_end) = rest.find("\n---") else {
+        return content.to_string();
+    };
+
+    let fm_content = &rest[..fm_end];
+    let suffix = &rest[fm_end..];
+    let mut lines: Vec<String> = fm_content.lines().map(ToString::to_string).collect();
+
+    if let Some(index) = lines
+        .iter()
+        .position(|line| line.trim_start().starts_with("version:"))
+    {
+        let indent_len = lines[index].len() - lines[index].trim_start().len();
+        let indent = &lines[index][..indent_len];
+        lines[index] = format!("{}version: \"{}\"", indent, version);
+    } else if let Some(index) = lines
+        .iter()
+        .position(|line| line.trim() == "metadata:" && !line.starts_with(' '))
+    {
+        lines.insert(index + 1, format!("  version: \"{}\"", version));
+    } else {
+        lines.push("metadata:".to_string());
+        lines.push(format!("  version: \"{}\"", version));
+    }
+
+    format!("---\n{}{}", lines.join("\n"), suffix)
+}
+
+fn create_tarball(dir: &Path, skill_version: &str) -> Result<Vec<u8>, String> {
     let buf = Vec::new();
     let enc = flate2::write::GzEncoder::new(buf, flate2::Compression::default());
     let mut builder = tar::Builder::new(enc);
@@ -705,6 +737,7 @@ fn create_tarball(dir: &Path) -> Result<Vec<u8>, String> {
         builder: &mut tar::Builder<flate2::write::GzEncoder<Vec<u8>>>,
         dir: &Path,
         prefix: &Path,
+        skill_version: &str,
     ) -> Result<(), String> {
         let entries = fs::read_dir(dir).map_err(|e| e.to_string())?;
         for entry in entries.flatten() {
@@ -719,12 +752,25 @@ fn create_tarball(dir: &Path) -> Result<Vec<u8>, String> {
             let archive_path = prefix.join(&name);
 
             if path.is_dir() {
-                add_dir_recursive(builder, &path, &archive_path)?;
+                add_dir_recursive(builder, &path, &archive_path, skill_version)?;
             } else if path.is_file() {
-                let mut f = fs::File::open(&path).map_err(|e| e.to_string())?;
-                builder
-                    .append_file(archive_path, &mut f)
-                    .map_err(|e| e.to_string())?;
+                if name == "SKILL.md" {
+                    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+                    let updated = ensure_skill_md_version(&content, skill_version);
+                    let bytes = updated.into_bytes();
+                    let mut header = tar::Header::new_gnu();
+                    header.set_size(bytes.len() as u64);
+                    header.set_mode(0o644);
+                    header.set_cksum();
+                    builder
+                        .append_data(&mut header, archive_path, bytes.as_slice())
+                        .map_err(|e| e.to_string())?;
+                } else {
+                    let mut f = fs::File::open(&path).map_err(|e| e.to_string())?;
+                    builder
+                        .append_file(archive_path, &mut f)
+                        .map_err(|e| e.to_string())?;
+                }
             }
         }
         Ok(())
@@ -735,10 +781,35 @@ fn create_tarball(dir: &Path) -> Result<Vec<u8>, String> {
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned();
-    add_dir_recursive(&mut builder, dir, Path::new(&dir_name))?;
+    add_dir_recursive(&mut builder, dir, Path::new(&dir_name), skill_version)?;
 
     let enc = builder.into_inner().map_err(|e| e.to_string())?;
     enc.finish().map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_skill_md_version;
+
+    #[test]
+    fn adds_metadata_version_when_missing() {
+        let content = "---\nname: sync\ndescription: Sync helper\n---\n# Sync\n";
+
+        let updated = ensure_skill_md_version(content, "1.4.0");
+
+        assert!(updated.contains("metadata:\n  version: \"1.4.0\""));
+    }
+
+    #[test]
+    fn updates_existing_frontmatter_version() {
+        let content =
+            "---\nname: sync\nmetadata:\n  author: SkillReg\n  version: \"1.3.0\"\n---\n# Sync\n";
+
+        let updated = ensure_skill_md_version(content, "1.4.0");
+
+        assert!(updated.contains("  version: \"1.4.0\""));
+        assert!(!updated.contains("1.3.0"));
+    }
 }
 
 fn urlencoded(s: &str) -> String {

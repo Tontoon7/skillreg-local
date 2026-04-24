@@ -1,4 +1,5 @@
 import { ProposeDialog } from "@/components/ProposeDialog";
+import { PublishDialog } from "@/components/PublishDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,6 +11,12 @@ import {
 	scanLocalSkills,
 	uninstallSkill,
 } from "@/lib/api";
+import {
+	type RegistrySkillLookup,
+	createRegistrySkillLookup,
+	getLocalSkillAction,
+	getRegistrySkillForLocal,
+} from "@/lib/local-skill-actions";
 import { notify } from "@/lib/notifications";
 import { useConfigStore } from "@/lib/store";
 import { tagStyle } from "@/lib/tag-colors";
@@ -27,6 +34,7 @@ import {
 	Search,
 	Send,
 	Trash2,
+	Upload,
 	X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -54,25 +62,17 @@ type ScopeFilter = "project" | "user";
 const AGENTS: AgentFilter[] = ["claude", "codex", "cursor"];
 const SCOPES: ScopeFilter[] = ["project", "user"];
 
-function getSkillSlug(skill: LocalSkill): string {
-	const dirName = skill.path.split("/").pop() || skill.path.split("\\").pop() || "";
-	return dirName.toLowerCase();
-}
-
 function getSyncStatus(
 	skill: LocalSkill,
 	updates: UpdateInfo[],
-	registryNames: Set<string>,
+	registrySkills: RegistrySkillLookup,
 ): SyncStatus {
 	const hasUpdate = updates.some(
 		(u) => u.name === skill.name && u.agent === skill.agent && u.scope === skill.scope,
 	);
 	if (hasUpdate) return "update_available";
 
-	const slug = getSkillSlug(skill);
-	const inRegistry = registryNames.has(skill.name.toLowerCase()) || registryNames.has(slug);
-
-	if (inRegistry) return "synced";
+	if (getRegistrySkillForLocal(skill, registrySkills)?.latestVersion) return "synced";
 	return "unknown";
 }
 
@@ -108,11 +108,12 @@ export function Installed() {
 	const org = useConfigStore((s) => s.config.org);
 	const [skills, setSkills] = useState<LocalSkill[]>([]);
 	const [updates, setUpdates] = useState<UpdateInfo[]>([]);
-	const [registryNames, setRegistryNames] = useState<Set<string>>(new Set());
+	const [registrySkills, setRegistrySkills] = useState<RegistrySkillLookup>({});
 	const [recentProposals, setRecentProposals] = useState<Record<string, ProposalSummary[]>>({});
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
 	const [actionLoading, setActionLoading] = useState<string | null>(null);
+	const [publishSkill, setPublishSkill] = useState<LocalSkill | null>(null);
 	const [proposeSkill, setProposeSkill] = useState<LocalSkill | null>(null);
 
 	const [search, setSearch] = useState("");
@@ -130,22 +131,26 @@ export function Installed() {
 			setSkills(result);
 
 			if (org) {
-				// Load registry names + updates in parallel
+				// Load registry versions + updates in parallel
 				const [updResult, catalogResult] = await Promise.allSettled([
 					result.length > 0 ? checkUpdates(org, result) : Promise.resolve([]),
 					listSkills({ org, page: 1, limit: 200 }),
 				]);
 
 				if (updResult.status === "fulfilled") setUpdates(updResult.value);
+				let registryLookup: RegistrySkillLookup = {};
 				if (catalogResult.status === "fulfilled") {
-					setRegistryNames(new Set(catalogResult.value.skills.map((s) => s.name.toLowerCase())));
+					registryLookup = createRegistrySkillLookup(catalogResult.value.skills);
+					setRegistrySkills(registryLookup);
 				}
 
 				const proposalResults = await Promise.allSettled(
-					result.map(async (skill) => ({
-						skillName: skill.name,
-						proposals: await listSkillProposals(org, skill.name),
-					})),
+					result
+						.filter((skill) => getLocalSkillAction(skill, registryLookup) === "propose")
+						.map(async (skill) => ({
+							skillName: skill.name,
+							proposals: await listSkillProposals(org, skill.name),
+						})),
 				);
 				const nextProposals: Record<string, ProposalSummary[]> = {};
 				for (const item of proposalResults) {
@@ -154,6 +159,10 @@ export function Installed() {
 					}
 				}
 				setRecentProposals(nextProposals);
+			} else {
+				setUpdates([]);
+				setRegistrySkills({});
+				setRecentProposals({});
 			}
 		} catch (e) {
 			setError(typeof e === "string" ? e : "Failed to scan local skills");
@@ -210,12 +219,11 @@ export function Installed() {
 
 	const stats = useMemo(() => {
 		const updateCount = updates.length;
-		const localOnly = skills.filter((s) => {
-			const slug = getSkillSlug(s);
-			return !registryNames.has(s.name.toLowerCase()) && !registryNames.has(slug);
-		}).length;
+		const localOnly = skills.filter(
+			(s) => getLocalSkillAction(s, registrySkills) === "publish",
+		).length;
 		return { total: skills.length, updateCount, localOnly };
-	}, [skills, updates, registryNames]);
+	}, [skills, updates, registrySkills]);
 
 	const presentAgents = useMemo(
 		() => AGENTS.filter((a) => skills.some((s) => s.agent === a)),
@@ -426,7 +434,8 @@ export function Installed() {
 						<div className="space-y-2">
 							{filteredSkills.map((skill) => {
 								const update = getUpdate(skill);
-								const status = getSyncStatus(skill, updates, registryNames);
+								const status = getSyncStatus(skill, updates, registrySkills);
+								const primaryAction = getLocalSkillAction(skill, registrySkills);
 								const key = `${skill.agent}:${skill.scope}:${skill.name}`;
 								const isLoading = actionLoading === key;
 
@@ -515,10 +524,20 @@ export function Installed() {
 													variant="outline"
 													size="sm"
 													disabled={isLoading}
-													onClick={() => setProposeSkill(skill)}
+													onClick={() => {
+														if (primaryAction === "propose") {
+															setProposeSkill(skill);
+														} else {
+															setPublishSkill(skill);
+														}
+													}}
 												>
-													<Send className="size-3.5" />
-													Propose
+													{primaryAction === "propose" ? (
+														<Send className="size-3.5" />
+													) : (
+														<Upload className="size-3.5" />
+													)}
+													{primaryAction === "propose" ? "Propose" : "Publish"}
 												</Button>
 											)}
 											<Button
@@ -558,6 +577,18 @@ export function Installed() {
 						</div>
 					)}
 				</>
+			)}
+
+			{publishSkill && org && (
+				<PublishDialog
+					skill={publishSkill}
+					org={org}
+					onClose={() => setPublishSkill(null)}
+					onPublished={() => {
+						setPublishSkill(null);
+						load();
+					}}
+				/>
 			)}
 
 			{proposeSkill && org && (
