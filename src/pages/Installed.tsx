@@ -4,7 +4,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-	checkUpdates,
 	listSkillProposals,
 	listSkills,
 	pullSkill,
@@ -20,7 +19,13 @@ import {
 import { notify } from "@/lib/notifications";
 import { useConfigStore } from "@/lib/store";
 import { tagStyle } from "@/lib/tag-colors";
-import type { LocalSkill, ProposalSummary, SyncStatus, UpdateInfo } from "@/lib/types";
+import type {
+	LocalSkill,
+	ProposalSummary,
+	RegistrySkill,
+	SyncStatus,
+	UpdateInfo,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
 	ArrowUpCircle,
@@ -58,15 +63,61 @@ function timeAgo(value: string): string {
 
 type AgentFilter = "claude" | "codex" | "cursor";
 type ScopeFilter = "project" | "user";
+type InstalledSyncStatus = SyncStatus | "checking";
 
 const AGENTS: AgentFilter[] = ["claude", "codex", "cursor"];
 const SCOPES: ScopeFilter[] = ["project", "user"];
+const REGISTRY_PAGE_SIZE = 200;
+
+async function loadAllRegistrySkills(org: string): Promise<RegistrySkill[]> {
+	const firstPage = await listSkills({ org, page: 1, limit: REGISTRY_PAGE_SIZE });
+	const remainingPages = Math.max(0, firstPage.pagination.totalPages - 1);
+	if (remainingPages === 0) return firstPage.skills;
+
+	const rest = await Promise.allSettled(
+		Array.from({ length: remainingPages }, (_, index) =>
+			listSkills({ org, page: index + 2, limit: REGISTRY_PAGE_SIZE }),
+		),
+	);
+
+	return [
+		...firstPage.skills,
+		...rest.flatMap((page) => (page.status === "fulfilled" ? page.value.skills : [])),
+	];
+}
+
+function getUpdatesFromRegistry(
+	skills: LocalSkill[],
+	registrySkills: RegistrySkillLookup,
+): UpdateInfo[] {
+	return skills.flatMap((skill) => {
+		const registrySkill = getRegistrySkillForLocal(skill, registrySkills);
+		const serverVersion = registrySkill?.latestVersion;
+
+		if (!serverVersion || skill.version === "-" || serverVersion === skill.version) {
+			return [];
+		}
+
+		return [
+			{
+				name: skill.name,
+				localVersion: skill.version,
+				serverVersion,
+				agent: skill.agent,
+				scope: skill.scope,
+			},
+		];
+	});
+}
 
 function getSyncStatus(
 	skill: LocalSkill,
 	updates: UpdateInfo[],
 	registrySkills: RegistrySkillLookup,
-): SyncStatus {
+	registryLoading: boolean,
+): InstalledSyncStatus {
+	if (registryLoading) return "checking";
+
 	const hasUpdate = updates.some(
 		(u) => u.name === skill.name && u.agent === skill.agent && u.scope === skill.scope,
 	);
@@ -76,8 +127,15 @@ function getSyncStatus(
 	return "unknown";
 }
 
-function StatusBadge({ status, update }: { status: SyncStatus; update?: UpdateInfo }) {
+function StatusBadge({ status, update }: { status: InstalledSyncStatus; update?: UpdateInfo }) {
 	switch (status) {
+		case "checking":
+			return (
+				<span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground border border-border">
+					<Loader2 className="size-3 animate-spin" />
+					Checking
+				</span>
+			);
 		case "synced":
 			return (
 				<span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400 border border-emerald-500/20">
@@ -111,6 +169,7 @@ export function Installed() {
 	const [registrySkills, setRegistrySkills] = useState<RegistrySkillLookup>({});
 	const [recentProposals, setRecentProposals] = useState<Record<string, ProposalSummary[]>>({});
 	const [loading, setLoading] = useState(true);
+	const [registryLoading, setRegistryLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [actionLoading, setActionLoading] = useState<string | null>(null);
 	const [publishSkill, setPublishSkill] = useState<LocalSkill | null>(null);
@@ -122,54 +181,79 @@ export function Installed() {
 	const [selectedScopes, setSelectedScopes] = useState<ScopeFilter[]>([]);
 
 	const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+	const registryRequestRef = useRef(0);
+
+	const loadRegistryMetadata = useCallback(
+		async (localSkills: LocalSkill[]) => {
+			const requestId = ++registryRequestRef.current;
+
+			if (!org) {
+				setUpdates([]);
+				setRegistrySkills({});
+				setRecentProposals({});
+				setRegistryLoading(false);
+				return;
+			}
+
+			setRegistryLoading(true);
+			setUpdates([]);
+			setRegistrySkills({});
+			setRecentProposals({});
+
+			let registryLookup: RegistrySkillLookup = {};
+			try {
+				const catalogSkills = await loadAllRegistrySkills(org);
+				if (registryRequestRef.current !== requestId) return;
+
+				registryLookup = createRegistrySkillLookup(catalogSkills);
+				setRegistrySkills(registryLookup);
+				setUpdates(getUpdatesFromRegistry(localSkills, registryLookup));
+			} catch (e) {
+				if (registryRequestRef.current !== requestId) return;
+				console.warn("Failed to load registry metadata for installed skills", e);
+				return;
+			} finally {
+				if (registryRequestRef.current === requestId) {
+					setRegistryLoading(false);
+				}
+			}
+
+			const proposalResults = await Promise.allSettled(
+				localSkills
+					.filter((skill) => getLocalSkillAction(skill, registryLookup) === "propose")
+					.map(async (skill) => ({
+						skillName: skill.name,
+						proposals: await listSkillProposals(org, skill.name),
+					})),
+			);
+			if (registryRequestRef.current !== requestId) return;
+
+			const nextProposals: Record<string, ProposalSummary[]> = {};
+			for (const item of proposalResults) {
+				if (item.status === "fulfilled") {
+					nextProposals[item.value.skillName] = item.value.proposals.slice(0, 3);
+				}
+			}
+			setRecentProposals(nextProposals);
+		},
+		[org],
+	);
 
 	const load = useCallback(async () => {
+		registryRequestRef.current += 1;
 		setLoading(true);
+		setRegistryLoading(false);
 		setError(null);
 		try {
 			const result = await scanLocalSkills();
 			setSkills(result);
-
-			if (org) {
-				// Load registry versions + updates in parallel
-				const [updResult, catalogResult] = await Promise.allSettled([
-					result.length > 0 ? checkUpdates(org, result) : Promise.resolve([]),
-					listSkills({ org, page: 1, limit: 200 }),
-				]);
-
-				if (updResult.status === "fulfilled") setUpdates(updResult.value);
-				let registryLookup: RegistrySkillLookup = {};
-				if (catalogResult.status === "fulfilled") {
-					registryLookup = createRegistrySkillLookup(catalogResult.value.skills);
-					setRegistrySkills(registryLookup);
-				}
-
-				const proposalResults = await Promise.allSettled(
-					result
-						.filter((skill) => getLocalSkillAction(skill, registryLookup) === "propose")
-						.map(async (skill) => ({
-							skillName: skill.name,
-							proposals: await listSkillProposals(org, skill.name),
-						})),
-				);
-				const nextProposals: Record<string, ProposalSummary[]> = {};
-				for (const item of proposalResults) {
-					if (item.status === "fulfilled") {
-						nextProposals[item.value.skillName] = item.value.proposals.slice(0, 3);
-					}
-				}
-				setRecentProposals(nextProposals);
-			} else {
-				setUpdates([]);
-				setRegistrySkills({});
-				setRecentProposals({});
-			}
+			setLoading(false);
+			void loadRegistryMetadata(result);
 		} catch (e) {
 			setError(typeof e === "string" ? e : "Failed to scan local skills");
-		} finally {
 			setLoading(false);
 		}
-	}, [org]);
+	}, [loadRegistryMetadata]);
 
 	useEffect(() => {
 		load();
@@ -214,16 +298,16 @@ export function Installed() {
 			result = result.filter((s) => selectedScopes.includes(s.scope as ScopeFilter));
 		}
 
-		return result.sort((a, b) => a.name.localeCompare(b.name));
+		return [...result].sort((a, b) => a.name.localeCompare(b.name));
 	}, [skills, debouncedSearch, selectedAgents, selectedScopes]);
 
 	const stats = useMemo(() => {
-		const updateCount = updates.length;
-		const localOnly = skills.filter(
-			(s) => getLocalSkillAction(s, registrySkills) === "publish",
-		).length;
+		const updateCount = registryLoading ? 0 : updates.length;
+		const localOnly = registryLoading
+			? 0
+			: skills.filter((s) => getLocalSkillAction(s, registrySkills) === "publish").length;
 		return { total: skills.length, updateCount, localOnly };
-	}, [skills, updates, registrySkills]);
+	}, [skills, updates, registrySkills, registryLoading]);
 
 	const presentAgents = useMemo(
 		() => AGENTS.filter((a) => skills.some((s) => s.agent === a)),
@@ -321,8 +405,8 @@ export function Installed() {
 			{/* Header */}
 			<div className="flex items-center justify-between">
 				<h1 className="text-lg font-semibold">Installed Skills</h1>
-				<Button variant="outline" size="sm" onClick={load}>
-					<RefreshCw className="size-3.5" />
+				<Button variant="outline" size="sm" onClick={load} disabled={loading}>
+					<RefreshCw className={cn("size-3.5", registryLoading && "animate-spin")} />
 					Refresh
 				</Button>
 			</div>
@@ -333,6 +417,9 @@ export function Installed() {
 					<span className="text-muted-foreground">
 						<span className="font-medium text-foreground">{stats.total}</span> installed
 					</span>
+					{registryLoading && org && (
+						<span className="text-muted-foreground">checking registry</span>
+					)}
 					{stats.updateCount > 0 && (
 						<span className="text-amber-400">
 							<span className="font-medium">{stats.updateCount}</span> update
@@ -434,8 +521,15 @@ export function Installed() {
 						<div className="space-y-2">
 							{filteredSkills.map((skill) => {
 								const update = getUpdate(skill);
-								const status = getSyncStatus(skill, updates, registrySkills);
-								const primaryAction = getLocalSkillAction(skill, registrySkills);
+								const status = getSyncStatus(
+									skill,
+									updates,
+									registrySkills,
+									registryLoading && !!org,
+								);
+								const primaryAction = registryLoading
+									? null
+									: getLocalSkillAction(skill, registrySkills);
 								const key = `${skill.agent}:${skill.scope}:${skill.name}`;
 								const isLoading = actionLoading === key;
 
@@ -523,8 +617,9 @@ export function Installed() {
 												<Button
 													variant="outline"
 													size="sm"
-													disabled={isLoading}
+													disabled={isLoading || registryLoading}
 													onClick={() => {
+														if (!primaryAction) return;
 														if (primaryAction === "propose") {
 															setProposeSkill(skill);
 														} else {
@@ -532,12 +627,18 @@ export function Installed() {
 														}
 													}}
 												>
-													{primaryAction === "propose" ? (
+													{registryLoading ? (
+														<Loader2 className="size-3.5 animate-spin" />
+													) : primaryAction === "propose" ? (
 														<Send className="size-3.5" />
 													) : (
 														<Upload className="size-3.5" />
 													)}
-													{primaryAction === "propose" ? "Propose" : "Publish"}
+													{registryLoading
+														? "Checking"
+														: primaryAction === "propose"
+															? "Propose"
+															: "Publish"}
 												</Button>
 											)}
 											<Button
