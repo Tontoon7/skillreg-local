@@ -2,10 +2,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { getEnvVars, setEnvVars } from "@/lib/api";
+import { listOrgEnvVars, setOrgEnvVar } from "@/lib/api";
 import type { EnvVarDecl } from "@/lib/types";
 import { Key, Loader2, Save, SkipForward, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 interface EnvVarSetupDialogProps {
 	skillName: string;
@@ -26,6 +26,11 @@ export function EnvVarSetupDialog({
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [loaded, setLoaded] = useState(false);
+	const [configuredNames, setConfiguredNames] = useState<Set<string>>(new Set());
+	const missingEnvVars = useMemo(
+		() => envVars.filter((variable) => !configuredNames.has(variable.name.trim().toUpperCase())),
+		[envVars, configuredNames],
+	);
 
 	// Close on Escape
 	useEffect(() => {
@@ -36,29 +41,27 @@ export function EnvVarSetupDialog({
 		return () => window.removeEventListener("keydown", handler);
 	}, [onClose]);
 
-	// Pre-fill with defaults and existing values
+	// Pre-fill missing fields with non-secret defaults only.
 	useEffect(() => {
 		const init: Record<string, string> = {};
 		for (const v of envVars) {
 			init[v.name] = v.default ?? "";
 		}
 
-		getEnvVars(org, skillName)
-			.then((existing) => {
-				for (const [k, v] of Object.entries(existing)) {
-					if (k in init) init[k] = v;
-				}
-			})
+		listOrgEnvVars(org)
+			.then((existing) =>
+				setConfiguredNames(new Set(existing.map((variable) => variable.name.trim().toUpperCase()))),
+			)
 			.catch(() => {})
 			.finally(() => {
 				setValues(init);
 				setLoaded(true);
 			});
-	}, [org, skillName, envVars]);
+	}, [org, envVars]);
 
 	const handleSave = async () => {
 		// Validate required fields
-		const missing = envVars.filter((v) => v.required && !values[v.name]?.trim());
+		const missing = missingEnvVars.filter((v) => v.required && !values[v.name]?.trim());
 		if (missing.length > 0) {
 			setError(`Required: ${missing.map((v) => v.name).join(", ")}`);
 			return;
@@ -66,8 +69,9 @@ export function EnvVarSetupDialog({
 
 		// Only save non-empty values
 		const toSave: Record<string, string> = {};
-		for (const [k, v] of Object.entries(values)) {
-			if (v.trim()) toSave[k] = v.trim();
+		for (const variable of missingEnvVars) {
+			const value = values[variable.name];
+			if (value?.trim()) toSave[variable.name] = value.trim();
 		}
 
 		if (Object.keys(toSave).length === 0) {
@@ -78,7 +82,9 @@ export function EnvVarSetupDialog({
 		setSaving(true);
 		setError(null);
 		try {
-			await setEnvVars(org, skillName, toSave);
+			await Promise.all(
+				Object.entries(toSave).map(([key, value]) => setOrgEnvVar(org, key, value)),
+			);
 			onSaved();
 		} catch (e) {
 			setError(typeof e === "string" ? e : "Failed to save variables");
@@ -103,8 +109,8 @@ export function EnvVarSetupDialog({
 				</div>
 
 				<p className="text-sm text-muted-foreground">
-					<span className="font-medium text-foreground">{skillName}</span> requires environment
-					variables to work properly.
+					<span className="font-medium text-foreground">{skillName}</span> requires the missing
+					environment variables below.
 				</p>
 
 				{!loaded ? (
@@ -113,29 +119,37 @@ export function EnvVarSetupDialog({
 					</div>
 				) : (
 					<div className="space-y-3 max-h-80 overflow-y-auto">
-						{envVars.map((v) => (
-							<div key={v.name} className="space-y-1.5">
-								<div className="flex items-center gap-2">
-									<Label htmlFor={`env-${v.name}`} className="font-mono text-xs">
-										{v.name}
-									</Label>
-									<Badge
-										variant={v.required ? "default" : "outline"}
-										className="text-[10px] px-1.5 py-0"
-									>
-										{v.required ? "required" : "optional"}
-									</Badge>
+						{missingEnvVars.length === 0 ? (
+							<p className="text-sm text-muted-foreground">
+								All required variables are already configured for this organization.
+							</p>
+						) : (
+							missingEnvVars.map((v) => (
+								<div key={v.name} className="space-y-1.5">
+									<div className="flex items-center gap-2">
+										<Label htmlFor={`env-${v.name}`} className="font-mono text-xs">
+											{v.name}
+										</Label>
+										<Badge
+											variant={v.required ? "default" : "outline"}
+											className="text-[10px] px-1.5 py-0"
+										>
+											{v.required ? "required" : "optional"}
+										</Badge>
+									</div>
+									{v.description && (
+										<p className="text-xs text-muted-foreground">{v.description}</p>
+									)}
+									<Input
+										id={`env-${v.name}`}
+										placeholder={v.default || v.name}
+										value={values[v.name] ?? ""}
+										onChange={(e) => setValues((prev) => ({ ...prev, [v.name]: e.target.value }))}
+										className="font-mono text-xs"
+									/>
 								</div>
-								{v.description && <p className="text-xs text-muted-foreground">{v.description}</p>}
-								<Input
-									id={`env-${v.name}`}
-									placeholder={v.default || v.name}
-									value={values[v.name] ?? ""}
-									onChange={(e) => setValues((prev) => ({ ...prev, [v.name]: e.target.value }))}
-									className="font-mono text-xs"
-								/>
-							</div>
-						))}
+							))
+						)}
 					</div>
 				)}
 

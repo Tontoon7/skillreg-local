@@ -1,6 +1,6 @@
 # SkillReg Local — Roadmap
 
-> Dernière mise à jour : 2026-02-18
+> Dernière mise à jour : 2026-05-20
 
 ---
 
@@ -60,6 +60,7 @@
 - [x] Parse SKILL.md frontmatter
 - [x] Détection symlinks
 - [x] Détection updates
+- [x] Vue Installed groupée par skill avec badges multi-agents/scopes
 - [x] Uninstall
 - [x] Push : file picker / drag & drop
 - [x] Preview SKILL.md
@@ -80,6 +81,34 @@
 - [x] Injection ${VAR}
 - [x] Settings page (org, agent, scope, sign out)
 - [x] Thème clair/sombre
+
+## Env Engine — Phase 1
+
+- [x] Inventaire variable-first depuis les skills installés et les fichiers `.env` legacy
+- [x] Détection des variables déclarées dans `SKILL.md` via `env:`
+- [x] Regroupement des skills dépendants par variable
+- [x] Vue Environment centrée sur variables manquantes, configurées, optionnelles et inutilisées
+- [x] Configuration d'une variable en une action pour les skills installés localement
+- [x] Badges de statut env dans Installed : ready, missing, optional, not required
+
+## Env Engine — Phase 2
+
+- [x] Stockage org-level des variables dans `~/.skillreg/env/{org}/variables.env`
+- [x] Couche Rust `EnvStore` : get, set, delete, list, aperçu/migration legacy
+- [x] UI Environment branchée sur une sauvegarde unique par organisation
+- [x] Inventaire et badges Installed compatibles org-level + legacy non conflictuel
+- [x] Migration sûre des fichiers legacy identiques, avec conflits exposés sans écrasement
+- [x] Flow d'installation : ne demande que les variables requises manquantes
+- [x] Documentation du fichier org-level comme backend temporaire avant secure store
+
+## Env Engine — Phase 3
+
+- [x] Remplacer `variables.env` par Keychain / Credential Manager / Secret Service quand disponible
+- [x] Ajouter `~/.skillreg/env/{org}/index.json` comme index sans secrets
+- [x] Garder `variables.env` comme fallback permissionné si le secure store est indisponible
+- [x] Ajouter une migration explicite du fallback Phase 2 vers le secure store
+- [x] Afficher le backend de stockage dans Environment
+- [ ] Ajouter une stratégie de cleanup explicite pour les fichiers legacy migrés
 
 ---
 

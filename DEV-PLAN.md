@@ -61,7 +61,7 @@ skillreg-local/
 │   │   │   ├── skills.rs       ← list_skills, get_skill, search_skills, pull_skill, push_skill, uninstall_skill, check_updates
 │   │   │   ├── local.rs        ← scan_local_skills, parse_frontmatter
 │   │   │   ├── config.rs       ← read_config, write_config
-│   │   │   └── env.rs          ← get_env_vars, set_env_vars, delete_env_vars, list_all_env_vars, import_env_file
+│   │   │   └── env.rs          ← EnvStore org-level + legacy env commands
 │   ├── Cargo.toml
 │   ├── tauri.conf.json
 │   └── icons/                  ← App icons (all sizes: .icns, .ico, .png)
@@ -240,23 +240,51 @@ fn write_config(config: Config) -> Result<(), String>
 
 ```rust
 #[tauri::command]
+fn get_org_env_var(org: String, key: String) -> Result<Option<String>, String>
+// Read one org-level value from the OS secure store, or fallback file if secure storage is unavailable
+
+#[tauri::command]
+fn set_org_env_var(org: String, key: String, value: String) -> Result<(), String>
+// Write one org-level variable to Keychain / Credential Manager / Secret Service
+
+#[tauri::command]
+fn delete_org_env_var(org: String, key: String) -> Result<(), String>
+// Remove one org-level variable
+
+#[tauri::command]
+fn list_org_env_vars(org: String) -> Result<Vec<OrgEnvVariable>, String>
+// List configured org-level variable metadata without values
+
+#[tauri::command]
+fn preview_legacy_env_migration(org: String) -> Result<EnvMigrationSummary, String>
+// Report migratable legacy variables and conflicts without exposing values
+
+#[tauri::command]
+fn migrate_legacy_env_vars(org: String) -> Result<EnvMigrationSummary, String>
+// Migrate only non-conflicting legacy values; keep old files as backup
+
+#[tauri::command]
+fn migrate_org_env_file_to_secure_store(org: String) -> Result<SecureStoreMigrationSummary, String>
+// Explicitly move Phase 2 fallback values from variables.env to the OS secure store
+
+#[tauri::command]
 fn get_env_vars(org: String, skill: String) -> Result<HashMap<String, String>, String>
-// Read ~/.skillreg/env/{org}/{skill}.env
+// Legacy compatibility: read ~/.skillreg/env/{org}/{skill}.env
 
 #[tauri::command]
 fn set_env_vars(org: String, skill: String, vars: HashMap<String, String>) -> Result<(), String>
-// Write to env file
+// Legacy compatibility: write to per-skill env file
 
 #[tauri::command]
 fn delete_env_vars(org: String, skill: String, keys: Vec<String>) -> Result<(), String>
-// Remove specific keys from env file
+// Legacy compatibility: remove specific keys from per-skill env file
 
 #[tauri::command]
-fn list_all_env_vars(org: String) -> Result<HashMap<String, HashMap<String, String>>, String>
-// List env vars for all skills in org
+fn list_all_env_vars(org: String) -> Result<Vec<SkillEnvVars>, String>
+// Legacy compatibility: list per-skill env files only
 
 #[tauri::command]
-fn import_env_file(org: String, skill: String, content: String) -> Result<(), String>
+fn import_env_file(org: String, skill: String, file_path: String) -> Result<HashMap<String, String>, String>
 // Parse .env content and merge into skill env vars
 ```
 
@@ -479,7 +507,10 @@ L'app desktop utilise exactement les mêmes fichiers que le CLI :
 |---------|---------|
 | `~/.skillreg/config.json` | Token, apiUrl, org par défaut, agent, scope, setupDone |
 | `.skillregrc` | Config par projet (org, skills) |
-| `~/.skillreg/env/{org}/{skill}.env` | Variables d'environnement par skill |
+| OS credential store | Valeurs org-level locales via macOS Keychain, Windows Credential Manager ou Linux Secret Service. |
+| `~/.skillreg/env/{org}/index.json` | Métadonnées sans secrets : noms de variables, statut configuré, backend de stockage, timestamps. |
+| `~/.skillreg/env/{org}/variables.env` | Fallback local permissionné si le secure store est indisponible, et source Phase 2 migrable explicitement. |
+| `~/.skillreg/env/{org}/{skill}.env` | Fichiers legacy par skill, lus pour compatibilité et migration sûre. |
 
 Les chemins d'installation sont identiques au CLI :
 
@@ -594,6 +625,8 @@ open = "5"                         # Ouvrir URL dans le navigateur
 - [x] Masquage des valeurs (affichage partiel)
 - [x] Warnings pour vars manquantes
 - [x] Injection ${VAR} dans le scan local
+- [x] Phase 2 Env Engine : stockage org-level temporaire dans `variables.env`, migration legacy sûre, conflits visibles
+- [x] Phase 3 Env Engine : stockage OS secure store, index sans secrets, fallback fichier explicite
 - [x] Page settings : org, agent, scope, theme, sign out
 - [x] Thème clair/sombre (toggle manuel + persistence localStorage)
 
@@ -639,7 +672,7 @@ Un développeur peut push via le CLI et les non-techniques installent via l'app.
 ## 13. Sécurité
 
 - Tokens stockés dans `~/.skillreg/config.json` (même que le CLI)
-- Envisager migration vers le keychain OS natif (Keychain macOS, Credential Manager Windows) en v2
+- Env vars stockées dans le secure store OS quand disponible ; `variables.env` reste uniquement fallback local permissionné
 - Checksum SHA-256 vérifié à chaque download
 - react-markdown pour le rendu markdown
 - Pas de secrets en clair dans l'UI (masquage des tokens et env vars)

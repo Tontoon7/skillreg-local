@@ -1,5 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+	EnvMigrationSummary,
+	OrgEnvVariable,
+	SecureStoreMigrationSummary,
+} from "./env-inventory";
+import type {
 	DeviceFlowResponse,
 	InstallResult,
 	LocalSkill,
@@ -85,6 +90,27 @@ export const scanLocalSkills = (agent?: string, scope?: string) =>
 // Env vars
 export const getEnvVars = (org: string, skill: string) =>
 	invoke<Record<string, string>>("get_env_vars", { org, skill });
+
+export const getOrgEnvVar = (org: string, key: string) =>
+	invoke<string | null>("get_org_env_var", { org, key });
+
+export const setOrgEnvVar = (org: string, key: string, value: string) =>
+	invoke<void>("set_org_env_var", { org, key, value });
+
+export const deleteOrgEnvVar = (org: string, key: string) =>
+	invoke<void>("delete_org_env_var", { org, key });
+
+export const listOrgEnvVars = (org: string) =>
+	invoke<OrgEnvVariable[]>("list_org_env_vars", { org });
+
+export const previewLegacyEnvMigration = (org: string) =>
+	invoke<EnvMigrationSummary>("preview_legacy_env_migration", { org });
+
+export const migrateLegacyEnvVars = (org: string) =>
+	invoke<EnvMigrationSummary>("migrate_legacy_env_vars", { org });
+
+export const migrateOrgEnvFileToSecureStore = (org: string) =>
+	invoke<SecureStoreMigrationSummary>("migrate_org_env_file_to_secure_store", { org });
 
 export const setEnvVars = (org: string, skill: string, vars: Record<string, string>) =>
 	invoke<void>("set_env_vars", { org, skill, vars });

@@ -38,6 +38,18 @@ pub fn get_agent_paths() -> HashMap<String, AgentPaths> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvVarDecl {
+    pub name: String,
+    pub description: String,
+    pub required: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secret: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalSkill {
     pub name: String,
     pub version: String,
@@ -48,6 +60,7 @@ pub struct LocalSkill {
     pub scope: String,
     pub content_hash: String,
     pub modified_at: Option<String>,
+    pub env_vars: Vec<EnvVarDecl>,
 }
 
 fn compute_sha256(content: &str) -> String {
@@ -154,8 +167,143 @@ fn parse_tags(content: &str) -> Vec<String> {
     tags
 }
 
+pub fn parse_env_from_frontmatter(content: &str) -> Vec<EnvVarDecl> {
+    let mut result = Vec::new();
+
+    let fm_content = match content.strip_prefix("---\n") {
+        Some(rest) => match rest.find("\n---") {
+            Some(i) => &rest[..i],
+            None => return result,
+        },
+        None => return result,
+    };
+
+    let mut in_env = false;
+    let mut in_item = false;
+    let mut name = String::new();
+    let mut description = String::new();
+    let mut required = true;
+    let mut secret: Option<bool> = None;
+    let mut default_val: Option<String> = None;
+
+    let flush = |result: &mut Vec<EnvVarDecl>,
+                 name: &mut String,
+                 description: &mut String,
+                 required: &mut bool,
+                 secret: &mut Option<bool>,
+                 default_val: &mut Option<String>| {
+        if !name.is_empty() {
+            result.push(EnvVarDecl {
+                name: name.clone(),
+                description: description.clone(),
+                required: *required,
+                secret: *secret,
+                default: default_val.clone(),
+            });
+        }
+        name.clear();
+        description.clear();
+        *required = true;
+        *secret = None;
+        *default_val = None;
+    };
+
+    for line in fm_content.lines() {
+        let trimmed = line.trim();
+
+        if trimmed == "env:" {
+            in_env = true;
+            continue;
+        }
+
+        if !in_env {
+            continue;
+        }
+
+        let indent = line.len() - line.trim_start().len();
+        if indent == 0 && !trimmed.is_empty() {
+            break;
+        }
+
+        if trimmed.starts_with("- ") {
+            flush(
+                &mut result,
+                &mut name,
+                &mut description,
+                &mut required,
+                &mut secret,
+                &mut default_val,
+            );
+            in_item = true;
+
+            let after_dash = trimmed.strip_prefix("- ").unwrap().trim();
+            apply_env_property(
+                after_dash,
+                &mut name,
+                &mut description,
+                &mut required,
+                &mut secret,
+                &mut default_val,
+            );
+            continue;
+        }
+
+        if in_item && indent >= 4 {
+            apply_env_property(
+                trimmed,
+                &mut name,
+                &mut description,
+                &mut required,
+                &mut secret,
+                &mut default_val,
+            );
+        }
+    }
+
+    flush(
+        &mut result,
+        &mut name,
+        &mut description,
+        &mut required,
+        &mut secret,
+        &mut default_val,
+    );
+
+    result
+}
+
+fn apply_env_property(
+    line: &str,
+    name: &mut String,
+    description: &mut String,
+    required: &mut bool,
+    secret: &mut Option<bool>,
+    default_val: &mut Option<String>,
+) {
+    let Some(sep) = line.find(':') else {
+        return;
+    };
+
+    let key = line[..sep].trim();
+    let val = line[sep + 1..]
+        .trim()
+        .trim_matches(|c| c == '"' || c == '\'');
+
+    match key {
+        "name" => *name = val.to_string(),
+        "description" => *description = val.to_string(),
+        "required" => *required = val.eq_ignore_ascii_case("true"),
+        "secret" => *secret = Some(val.eq_ignore_ascii_case("true")),
+        "default" => *default_val = Some(val.to_string()),
+        _ => {}
+    }
+}
+
 #[tauri::command]
-pub fn scan_local_skills(agent: Option<String>, scope: Option<String>) -> Result<Vec<LocalSkill>, String> {
+pub fn scan_local_skills(
+    agent: Option<String>,
+    scope: Option<String>,
+) -> Result<Vec<LocalSkill>, String> {
     let agent_paths = get_agent_paths();
     let agents: Vec<String> = match agent {
         Some(a) => vec![a],
@@ -205,7 +353,11 @@ pub fn scan_local_skills(agent: Option<String>, scope: Option<String>) -> Result
                     fs::read_dir(&full_path).ok().and_then(|entries| {
                         entries.flatten().find_map(|e| {
                             let name = e.file_name().to_string_lossy().into_owned();
-                            if name.ends_with(".md") { Some(e.path()) } else { None }
+                            if name.ends_with(".md") {
+                                Some(e.path())
+                            } else {
+                                None
+                            }
                         })
                     })
                 };
@@ -215,6 +367,7 @@ pub fn scan_local_skills(agent: Option<String>, scope: Option<String>) -> Result
                     let hash = compute_sha256(&content);
                     let fm = parse_frontmatter(&content);
                     let tags = parse_tags(&content);
+                    let env_vars = parse_env_from_frontmatter(&content);
 
                     let modified_at = fs::metadata(&md)
                         .and_then(|m| m.modified())
@@ -224,7 +377,11 @@ pub fn scan_local_skills(agent: Option<String>, scope: Option<String>) -> Result
 
                     results.push(LocalSkill {
                         name: fm.get("name").cloned().unwrap_or_else(|| fname.clone()),
-                        version: fm.get("version").or_else(|| fm.get("metadata.version")).cloned().unwrap_or_else(|| "-".into()),
+                        version: fm
+                            .get("version")
+                            .or_else(|| fm.get("metadata.version"))
+                            .cloned()
+                            .unwrap_or_else(|| "-".into()),
                         description: fm.get("description").cloned().unwrap_or_default(),
                         tags,
                         path: full_path.to_string_lossy().into_owned(),
@@ -232,6 +389,7 @@ pub fn scan_local_skills(agent: Option<String>, scope: Option<String>) -> Result
                         scope: sc.clone(),
                         content_hash: hash,
                         modified_at,
+                        env_vars,
                     });
                 }
             }

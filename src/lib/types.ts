@@ -105,6 +105,7 @@ export interface EnvVarDecl {
 	name: string;
 	description: string;
 	required: boolean;
+	secret?: boolean;
 	default?: string;
 }
 
@@ -169,6 +170,7 @@ export interface LocalSkill {
 	scope: ScopeType;
 	content_hash: string;
 	modified_at: string | null;
+	env_vars?: EnvVarDecl[];
 }
 
 export type SyncStatus = "synced" | "modified_locally" | "update_available" | "unknown";

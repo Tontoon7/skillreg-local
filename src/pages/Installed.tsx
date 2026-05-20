@@ -4,12 +4,22 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+	listOrgEnvVars,
 	listSkillProposals,
 	listSkills,
+	previewLegacyEnvMigration,
 	pullSkill,
 	scanLocalSkills,
 	uninstallSkill,
 } from "@/lib/api";
+import {
+	type EnvMigrationSummary,
+	type EnvReadinessSummary,
+	type OrgEnvVariable,
+	buildEnvInventory,
+	getEnvStatusForSkills,
+} from "@/lib/env-inventory";
+import { type InstalledSkillGroup, groupInstalledSkills } from "@/lib/installed-skill-groups";
 import {
 	type RegistrySkillLookup,
 	createRegistrySkillLookup,
@@ -28,12 +38,14 @@ import type {
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
+	AlertCircle,
 	ArrowUpCircle,
 	Check,
 	CircleDot,
 	Clock,
 	FolderOpen,
 	HardDrive,
+	Key,
 	Loader2,
 	RefreshCw,
 	Search,
@@ -162,10 +174,57 @@ function StatusBadge({ status, update }: { status: InstalledSyncStatus; update?:
 	}
 }
 
+function EnvStatusBadge({ summary }: { summary: EnvReadinessSummary }) {
+	switch (summary.status) {
+		case "ready":
+			return (
+				<span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400 border border-emerald-500/20">
+					<Check className="size-3" />
+					Env ready
+				</span>
+			);
+		case "missing":
+			return (
+				<span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-400 border border-amber-500/20">
+					<AlertCircle className="size-3" />
+					Env missing{summary.missingCount > 0 ? `: ${summary.missingCount}` : ""}
+				</span>
+			);
+		case "optional":
+			return (
+				<span className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-400 border border-blue-500/20">
+					<Key className="size-3" />
+					Env optional
+				</span>
+			);
+		case "not_required":
+			return (
+				<span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground border border-border">
+					<Key className="size-3" />
+					Env not required
+				</span>
+			);
+		default:
+			return null;
+	}
+}
+
+function getInstallKey(skill: LocalSkill): string {
+	return `${skill.agent}:${skill.scope}:${skill.name}`;
+}
+
+function getVersionLabel(group: InstalledSkillGroup): string {
+	const versions = [...new Set(group.installations.map((skill) => skill.version))];
+	if (versions.length === 1) return versions[0] ?? "-";
+	return `${versions.length} versions`;
+}
+
 export function Installed() {
 	const org = useConfigStore((s) => s.config.org);
 	const [skills, setSkills] = useState<LocalSkill[]>([]);
 	const [updates, setUpdates] = useState<UpdateInfo[]>([]);
+	const [orgEnvVars, setOrgEnvVars] = useState<OrgEnvVariable[]>([]);
+	const [migrationSummary, setMigrationSummary] = useState<EnvMigrationSummary | null>(null);
 	const [registrySkills, setRegistrySkills] = useState<RegistrySkillLookup>({});
 	const [recentProposals, setRecentProposals] = useState<Record<string, ProposalSummary[]>>({});
 	const [loading, setLoading] = useState(true);
@@ -245,15 +304,21 @@ export function Installed() {
 		setRegistryLoading(false);
 		setError(null);
 		try {
-			const result = await scanLocalSkills();
+			const [result, orgVars, migration] = await Promise.all([
+				scanLocalSkills(),
+				org ? listOrgEnvVars(org).catch(() => []) : Promise.resolve([]),
+				org ? previewLegacyEnvMigration(org).catch(() => null) : Promise.resolve(null),
+			]);
 			setSkills(result);
+			setOrgEnvVars(orgVars);
+			setMigrationSummary(migration);
 			setLoading(false);
 			void loadRegistryMetadata(result);
 		} catch (e) {
 			setError(typeof e === "string" ? e : "Failed to scan local skills");
 			setLoading(false);
 		}
-	}, [loadRegistryMetadata]);
+	}, [loadRegistryMetadata, org]);
 
 	useEffect(() => {
 		load();
@@ -301,13 +366,27 @@ export function Installed() {
 		return [...result].sort((a, b) => a.name.localeCompare(b.name));
 	}, [skills, debouncedSearch, selectedAgents, selectedScopes]);
 
+	const groupedSkills = useMemo(() => groupInstalledSkills(filteredSkills), [filteredSkills]);
+	const totalSkillGroups = useMemo(() => groupInstalledSkills(skills).length, [skills]);
+	const envInventory = useMemo(() => {
+		if (!org) return null;
+		return buildEnvInventory({
+			org,
+			installedSkills: skills,
+			orgEnvVars,
+			legacyVariables: migrationSummary?.legacyVariables ?? [],
+		});
+	}, [org, skills, orgEnvVars, migrationSummary]);
+
 	const stats = useMemo(() => {
 		const updateCount = registryLoading ? 0 : updates.length;
 		const localOnly = registryLoading
 			? 0
-			: skills.filter((s) => getLocalSkillAction(s, registrySkills) === "publish").length;
-		return { total: skills.length, updateCount, localOnly };
-	}, [skills, updates, registrySkills, registryLoading]);
+			: groupInstalledSkills(
+					skills.filter((s) => getLocalSkillAction(s, registrySkills) === "publish"),
+				).length;
+		return { total: totalSkillGroups, installations: skills.length, updateCount, localOnly };
+	}, [skills, updates, registrySkills, registryLoading, totalSkillGroups]);
 
 	const presentAgents = useMemo(
 		() => AGENTS.filter((a) => skills.some((s) => s.agent === a)),
@@ -322,7 +401,7 @@ export function Installed() {
 		debouncedSearch || selectedAgents.length > 0 || selectedScopes.length > 0;
 
 	const handleUninstall = async (skill: LocalSkill) => {
-		const key = `${skill.agent}:${skill.scope}:${skill.name}`;
+		const key = getInstallKey(skill);
 		setActionLoading(key);
 		try {
 			await uninstallSkill(skill.name, skill.agent, skill.scope);
@@ -415,7 +494,13 @@ export function Installed() {
 			{skills.length > 0 && (
 				<div className="flex items-center gap-4 text-sm">
 					<span className="text-muted-foreground">
-						<span className="font-medium text-foreground">{stats.total}</span> installed
+						<span className="font-medium text-foreground">{stats.total}</span> skills
+						{stats.installations !== stats.total && (
+							<>
+								{" · "}
+								<span className="font-medium text-foreground">{stats.installations}</span> installs
+							</>
+						)}
 					</span>
 					{registryLoading && org && (
 						<span className="text-muted-foreground">checking registry</span>
@@ -517,115 +602,112 @@ export function Installed() {
 					)}
 
 					{/* Skills list */}
-					{filteredSkills.length > 0 ? (
+					{groupedSkills.length > 0 ? (
 						<div className="space-y-2">
-							{filteredSkills.map((skill) => {
-								const update = getUpdate(skill);
-								const status = getSyncStatus(
-									skill,
-									updates,
-									registrySkills,
-									registryLoading && !!org,
-								);
+							{groupedSkills.map((group) => {
+								const primarySkill = group.installations[0];
+								if (!primarySkill) return null;
+
+								const groupUpdates = group.installations
+									.map((skill) => getUpdate(skill))
+									.filter((update): update is UpdateInfo => Boolean(update));
+								const groupStatus: InstalledSyncStatus =
+									registryLoading && !!org
+										? "checking"
+										: groupUpdates.length > 0
+											? "update_available"
+											: group.installations.some(
+														(skill) =>
+															getRegistrySkillForLocal(skill, registrySkills)?.latestVersion,
+													)
+												? "synced"
+												: "unknown";
 								const primaryAction = registryLoading
 									? null
-									: getLocalSkillAction(skill, registrySkills);
-								const key = `${skill.agent}:${skill.scope}:${skill.name}`;
-								const isLoading = actionLoading === key;
+									: getLocalSkillAction(primarySkill, registrySkills);
+								const groupActionLoading = group.installations.some(
+									(skill) => actionLoading === getInstallKey(skill),
+								);
+								const envSummary = envInventory
+									? getEnvStatusForSkills(group.installations, envInventory)
+									: null;
 
 								return (
-									<div
-										key={key}
-										className="flex items-center justify-between rounded-xl border bg-card p-4 gap-4"
-									>
-										<div className="flex flex-col gap-1.5 min-w-0 flex-1">
-											<div className="flex items-center gap-2 flex-wrap">
-												<span className="font-medium truncate">{skill.name}</span>
-												<Badge variant="secondary">{skill.version}</Badge>
-												<StatusBadge status={status} update={update} />
-											</div>
-											{skill.description && (
-												<p className="text-sm text-muted-foreground line-clamp-1">
-													{skill.description}
-												</p>
-											)}
-											<div className="flex items-center gap-2 flex-wrap">
-												{skill.tags.length > 0 && (
-													<div className="flex flex-wrap gap-1">
-														{skill.tags.slice(0, 4).map((tag) => (
+									<div key={group.name.toLowerCase()} className="rounded-xl border bg-card p-4">
+										<div className="flex items-start justify-between gap-4">
+											<div className="flex min-w-0 flex-1 flex-col gap-1.5">
+												<div className="flex items-center gap-2 flex-wrap">
+													<span className="font-medium truncate">{group.name}</span>
+													<Badge variant="secondary">{getVersionLabel(group)}</Badge>
+													<StatusBadge status={groupStatus} update={groupUpdates[0]} />
+													{envSummary && <EnvStatusBadge summary={envSummary} />}
+													<span className="text-[11px] text-muted-foreground/60">
+														{group.installations.length} install
+														{group.installations.length > 1 ? "s" : ""}
+													</span>
+												</div>
+												{group.description && (
+													<p className="text-sm text-muted-foreground line-clamp-1">
+														{group.description}
+													</p>
+												)}
+												<div className="flex items-center gap-2 flex-wrap">
+													{group.tags.length > 0 && (
+														<div className="flex flex-wrap gap-1">
+															{group.tags.slice(0, 4).map((tag) => (
+																<span
+																	key={tag}
+																	className="inline-flex items-center rounded-full border px-2 py-0 text-[11px] font-medium"
+																	style={tagStyle(tag, false)}
+																>
+																	{tag}
+																</span>
+															))}
+														</div>
+													)}
+													{group.modified_at && (
+														<span className="text-[11px] text-muted-foreground/50">
+															<Clock className="inline size-2.5 -mt-px" />
+															{"  "}
+															{timeAgo(group.modified_at)}
+														</span>
+													)}
+												</div>
+												{recentProposals[group.name] && recentProposals[group.name].length > 0 && (
+													<div className="flex flex-wrap items-center gap-2 pt-1">
+														<span className="text-[11px] uppercase tracking-wide text-muted-foreground/60">
+															Recent proposals
+														</span>
+														{recentProposals[group.name].map((proposal) => (
 															<span
-																key={tag}
-																className="inline-flex items-center rounded-full border px-2 py-0 text-[11px] font-medium"
-																style={tagStyle(tag, false)}
+																key={proposal.id}
+																className={cn(
+																	"inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium",
+																	getProposalTone(proposal.status),
+																)}
 															>
-																{tag}
+																{proposal.title}
+																<span className="opacity-70">· {timeAgo(proposal.createdAt)}</span>
 															</span>
 														))}
 													</div>
 												)}
-												<span className="text-[11px] text-muted-foreground/50">
-													{skill.agent} · {skill.scope}
-													{skill.modified_at && (
-														<>
-															{" · "}
-															<Clock className="inline size-2.5 -mt-px" />
-															{"  "}
-															{timeAgo(skill.modified_at)}
-														</>
-													)}
-												</span>
 											</div>
-											{recentProposals[skill.name] && recentProposals[skill.name].length > 0 && (
-												<div className="flex flex-wrap items-center gap-2 pt-1">
-													<span className="text-[11px] uppercase tracking-wide text-muted-foreground/60">
-														Recent proposals
-													</span>
-													{recentProposals[skill.name].map((proposal) => (
-														<span
-															key={proposal.id}
-															className={cn(
-																"inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium",
-																getProposalTone(proposal.status),
-															)}
-														>
-															{proposal.title}
-															<span className="opacity-70">· {timeAgo(proposal.createdAt)}</span>
-														</span>
-													))}
-												</div>
-											)}
-										</div>
 
-										<div className="flex items-center gap-2 shrink-0">
-											{update && (
-												<Button
-													variant="outline"
-													size="sm"
-													disabled={isLoading}
-													onClick={() => handleUpdate(update)}
-													className="text-accent"
-												>
-													{isLoading ? (
-														<Loader2 className="size-3.5 animate-spin" />
-													) : (
-														<ArrowUpCircle className="size-3.5" />
-													)}
-													Update
-												</Button>
-											)}
 											{org && (
 												<Button
 													variant="outline"
 													size="sm"
-													disabled={isLoading || registryLoading}
+													disabled={groupActionLoading || registryLoading}
 													onClick={() => {
 														if (!primaryAction) return;
 														if (primaryAction === "propose") {
-															setProposeSkill(skill);
+															setProposeSkill(primarySkill);
 														} else {
-															setPublishSkill(skill);
+															setPublishSkill(primarySkill);
 														}
 													}}
+													className="shrink-0"
 												>
 													{registryLoading ? (
 														<Loader2 className="size-3.5 animate-spin" />
@@ -641,19 +723,69 @@ export function Installed() {
 															: "Publish"}
 												</Button>
 											)}
-											<Button
-												variant="ghost"
-												size="sm"
-												disabled={isLoading}
-												onClick={() => handleUninstall(skill)}
-												className="text-destructive hover:text-destructive"
-											>
-												{isLoading ? (
-													<Loader2 className="size-3.5 animate-spin" />
-												) : (
-													<Trash2 className="size-3.5" />
-												)}
-											</Button>
+										</div>
+
+										<div className="mt-3 flex flex-col gap-1.5">
+											{group.installations.map((skill) => {
+												const update = getUpdate(skill);
+												const status = getSyncStatus(
+													skill,
+													updates,
+													registrySkills,
+													registryLoading && !!org,
+												);
+												const key = getInstallKey(skill);
+												const isLoading = actionLoading === key;
+
+												return (
+													<div
+														key={key}
+														className="flex items-center justify-between gap-3 rounded-lg bg-muted/30 px-3 py-2"
+													>
+														<div className="flex min-w-0 flex-wrap items-center gap-2">
+															<span className="text-xs font-medium capitalize">{skill.agent}</span>
+															<span className="text-xs text-muted-foreground">{skill.scope}</span>
+															<Badge variant="outline">{skill.version}</Badge>
+															<StatusBadge status={status} update={update} />
+															<span className="truncate text-[11px] text-muted-foreground/50">
+																{skill.path}
+															</span>
+														</div>
+														<div className="flex shrink-0 items-center gap-1.5">
+															{update && (
+																<Button
+																	variant="outline"
+																	size="sm"
+																	disabled={isLoading}
+																	onClick={() => handleUpdate(update)}
+																	className="text-accent"
+																>
+																	{isLoading ? (
+																		<Loader2 className="size-3.5 animate-spin" />
+																	) : (
+																		<ArrowUpCircle className="size-3.5" />
+																	)}
+																	Update
+																</Button>
+															)}
+															<Button
+																variant="ghost"
+																size="sm"
+																disabled={isLoading}
+																onClick={() => handleUninstall(skill)}
+																className="text-destructive hover:text-destructive"
+																title={`Uninstall from ${skill.agent} ${skill.scope}`}
+															>
+																{isLoading ? (
+																	<Loader2 className="size-3.5 animate-spin" />
+																) : (
+																	<Trash2 className="size-3.5" />
+																)}
+															</Button>
+														</div>
+													</div>
+												);
+											})}
 										</div>
 									</div>
 								);

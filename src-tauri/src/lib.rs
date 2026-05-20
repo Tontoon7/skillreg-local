@@ -65,9 +65,16 @@ pub fn run() {
             commands::skills::uninstall_skill,
             commands::skills::check_updates,
             commands::env::get_env_vars,
+            commands::env::get_org_env_var,
             commands::env::set_env_vars,
+            commands::env::set_org_env_var,
             commands::env::delete_env_vars,
+            commands::env::delete_org_env_var,
+            commands::env::list_org_env_vars,
             commands::env::list_all_env_vars,
+            commands::env::preview_legacy_env_migration,
+            commands::env::migrate_legacy_env_vars,
+            commands::env::migrate_org_env_file_to_secure_store,
             commands::env::import_env_file,
         ])
         .run(tauri::generate_context!())
