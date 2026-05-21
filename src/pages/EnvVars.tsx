@@ -2,6 +2,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+	cleanupLegacyEnvVars,
 	deleteEnvVars,
 	deleteOrgEnvVar,
 	getOrgEnvVar,
@@ -16,6 +17,7 @@ import {
 	type EnvMigrationSummary,
 	type EnvStoredVariable,
 	type EnvVariableInventoryItem,
+	type LegacyCleanupSummary,
 	type OrgEnvVariable,
 	buildEnvInventory,
 } from "@/lib/env-inventory";
@@ -128,6 +130,7 @@ export function EnvVars() {
 	const [migrationSummary, setMigrationSummary] = useState<EnvMigrationSummary | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [migrating, setMigrating] = useState(false);
+	const [cleaningLegacy, setCleaningLegacy] = useState(false);
 	const [secureMigrating, setSecureMigrating] = useState(false);
 	const [savingKey, setSavingKey] = useState<string | null>(null);
 	const [newKey, setNewKey] = useState("");
@@ -246,6 +249,27 @@ export function EnvVars() {
 			setError(typeof e === "string" ? e : "Failed to migrate legacy variables");
 		} finally {
 			setMigrating(false);
+		}
+	};
+
+	const cleanupLegacyBackups = async () => {
+		if (!org) return;
+		setCleaningLegacy(true);
+		setError(null);
+		try {
+			const summary: LegacyCleanupSummary = await cleanupLegacyEnvVars(org);
+			if (summary.skipped.length > 0) {
+				setError(
+					`Legacy cleanup skipped ${summary.skipped
+						.map((item) => item.name)
+						.join(", ")} because stored values differ or are not configured.`,
+				);
+			}
+			await load();
+		} catch (e) {
+			setError(typeof e === "string" ? e : "Failed to clean up legacy files");
+		} finally {
+			setCleaningLegacy(false);
 		}
 	};
 
@@ -410,6 +434,8 @@ export function EnvVars() {
 				summary={migrationSummary}
 				migrating={migrating}
 				onMigrate={migrateSafeLegacyValues}
+				cleaning={cleaningLegacy}
+				onCleanup={cleanupLegacyBackups}
 			/>
 
 			<UnusedStoredSection
@@ -702,10 +728,14 @@ function LegacyStatusSection({
 	summary,
 	migrating,
 	onMigrate,
+	cleaning,
+	onCleanup,
 }: {
 	summary: EnvMigrationSummary | null;
 	migrating: boolean;
 	onMigrate: () => Promise<void>;
+	cleaning: boolean;
+	onCleanup: () => Promise<void>;
 }) {
 	const legacyCount = summary?.legacyVariables.length ?? 0;
 	const migratable = summary?.migratable ?? [];
@@ -759,10 +789,25 @@ function LegacyStatusSection({
 					)}
 
 					{backups.length > 0 && (
-						<div className="space-y-1">
-							<p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-								Legacy backups still present
-							</p>
+						<div className="space-y-3 rounded-lg border border-border bg-background/40 p-3">
+							<div className="flex flex-wrap items-center justify-between gap-3">
+								<div>
+									<p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+										Legacy backups still present
+									</p>
+									<p className="text-xs text-muted-foreground">
+										Cleanup removes only legacy values that exactly match org-level storage.
+									</p>
+								</div>
+								<Button size="sm" variant="outline" onClick={onCleanup} disabled={cleaning}>
+									{cleaning ? (
+										<Loader2 className="size-3.5 animate-spin" />
+									) : (
+										<Trash2 className="size-3.5" />
+									)}
+									Clean backups
+								</Button>
+							</div>
 							<div className="flex flex-wrap gap-1.5">
 								{backups.map((variable) => (
 									<Badge key={variable.name} variant="outline" className="font-mono">

@@ -164,7 +164,10 @@ pub async fn propose_skill_change(
 }
 
 #[tauri::command]
-pub async fn list_skill_proposals(org: String, name: String) -> Result<Vec<ProposalSummary>, String> {
+pub async fn list_skill_proposals(
+    org: String,
+    name: String,
+) -> Result<Vec<ProposalSummary>, String> {
     let (client, token) = get_auth_client()?;
 
     let resp = client

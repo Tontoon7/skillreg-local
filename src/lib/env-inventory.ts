@@ -43,6 +43,23 @@ export interface EnvMigrationSummary {
 	legacyVariables: LegacyEnvVariableSummary[];
 }
 
+export interface LegacyCleanupItem {
+	name: string;
+	skills: string[];
+}
+
+export interface LegacyCleanupSkipped {
+	name: string;
+	skills: string[];
+	reason: "valueMismatch" | "notConfigured" | string;
+}
+
+export interface LegacyCleanupSummary {
+	cleaned: LegacyCleanupItem[];
+	removedFiles: string[];
+	skipped: LegacyCleanupSkipped[];
+}
+
 export interface SecureStoreMigrationItem {
 	name: string;
 }

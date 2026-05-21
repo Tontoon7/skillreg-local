@@ -76,7 +76,10 @@ pub async fn login_poll(device_code: String) -> Result<PollResponse, String> {
         return Err(format!("Server error: {}", resp.status()));
     }
 
-    let poll: PollResponse = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
+    let poll: PollResponse = resp
+        .json()
+        .await
+        .map_err(|e| format!("Parse error: {}", e))?;
 
     // If complete, save token to config
     if poll.status == "complete" {

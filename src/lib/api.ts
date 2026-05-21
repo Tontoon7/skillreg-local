@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
 	EnvMigrationSummary,
+	LegacyCleanupSummary,
 	OrgEnvVariable,
 	SecureStoreMigrationSummary,
 } from "./env-inventory";
@@ -108,6 +109,9 @@ export const previewLegacyEnvMigration = (org: string) =>
 
 export const migrateLegacyEnvVars = (org: string) =>
 	invoke<EnvMigrationSummary>("migrate_legacy_env_vars", { org });
+
+export const cleanupLegacyEnvVars = (org: string) =>
+	invoke<LegacyCleanupSummary>("cleanup_legacy_env_vars", { org });
 
 export const migrateOrgEnvFileToSecureStore = (org: string) =>
 	invoke<SecureStoreMigrationSummary>("migrate_org_env_file_to_secure_store", { org });

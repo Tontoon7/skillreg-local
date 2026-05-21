@@ -395,6 +395,29 @@ pub struct EnvMigrationSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct LegacyCleanupItem {
+    pub name: String,
+    pub skills: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyCleanupSkipped {
+    pub name: String,
+    pub skills: Vec<String>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyCleanupSummary {
+    pub cleaned: Vec<LegacyCleanupItem>,
+    pub removed_files: Vec<String>,
+    pub skipped: Vec<LegacyCleanupSkipped>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SecureStoreMigrationItem {
     pub name: String,
 }
@@ -671,6 +694,98 @@ impl EnvStore {
         self.build_legacy_migration(true)
     }
 
+    pub fn cleanup_legacy_variables(&self) -> Result<LegacyCleanupSummary, String> {
+        let dir = self.org_dir();
+        if !dir.exists() {
+            return Ok(LegacyCleanupSummary {
+                cleaned: Vec::new(),
+                removed_files: Vec::new(),
+                skipped: Vec::new(),
+            });
+        }
+
+        let mut cleaned_by_name: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut skipped_by_reason: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
+        let mut removed_files = Vec::new();
+
+        for entry in fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
+            let fname = entry.file_name().to_string_lossy().into_owned();
+            if !fname.ends_with(".env") || fname == ORG_VARIABLES_FILE {
+                continue;
+            }
+
+            let skill = fname.trim_end_matches(".env").to_string();
+            let path = entry.path();
+            let vars = parse_env_file(&fs::read_to_string(&path).unwrap_or_default());
+            if vars.is_empty() {
+                continue;
+            }
+
+            let mut remaining = vars.clone();
+            let mut changed = false;
+
+            for (raw_name, value) in vars {
+                let name = normalize_key(&raw_name);
+                if !is_valid_env_key(&name) || value.trim().is_empty() {
+                    continue;
+                }
+
+                match self.get_variable(&name)? {
+                    Some(current) if current == value => {
+                        remaining.remove(&raw_name);
+                        cleaned_by_name
+                            .entry(name)
+                            .or_default()
+                            .insert(skill.clone());
+                        changed = true;
+                    }
+                    Some(_) => {
+                        skipped_by_reason
+                            .entry((name, "valueMismatch".to_string()))
+                            .or_default()
+                            .insert(skill.clone());
+                    }
+                    None => {
+                        skipped_by_reason
+                            .entry((name, "notConfigured".to_string()))
+                            .or_default()
+                            .insert(skill.clone());
+                    }
+                }
+            }
+
+            if changed {
+                write_private_env_file(&path, &remaining)?;
+                if !path.exists() {
+                    removed_files.push(skill);
+                }
+            }
+        }
+
+        let cleaned = cleaned_by_name
+            .into_iter()
+            .map(|(name, skills)| LegacyCleanupItem {
+                name,
+                skills: skills.into_iter().collect(),
+            })
+            .collect();
+        let skipped = skipped_by_reason
+            .into_iter()
+            .map(|((name, reason), skills)| LegacyCleanupSkipped {
+                name,
+                reason,
+                skills: skills.into_iter().collect(),
+            })
+            .collect();
+        removed_files.sort();
+
+        Ok(LegacyCleanupSummary {
+            cleaned,
+            removed_files,
+            skipped,
+        })
+    }
+
     pub fn migrate_fallback_file_to_secure_store(
         &self,
     ) -> Result<SecureStoreMigrationSummary, String> {
@@ -824,6 +939,11 @@ pub fn preview_legacy_env_migration(org: String) -> Result<EnvMigrationSummary, 
 #[tauri::command]
 pub fn migrate_legacy_env_vars(org: String) -> Result<EnvMigrationSummary, String> {
     EnvStore::new(&org).migrate_legacy_variables()
+}
+
+#[tauri::command]
+pub fn cleanup_legacy_env_vars(org: String) -> Result<LegacyCleanupSummary, String> {
+    EnvStore::new(&org).cleanup_legacy_variables()
 }
 
 #[tauri::command]
@@ -1117,6 +1237,65 @@ mod tests {
         );
         assert!(root.join("kairia").join("reviewer.env").exists());
         assert!(root.join("kairia").join("writer.env").exists());
+    }
+
+    #[test]
+    fn cleans_up_legacy_values_that_match_org_storage() {
+        let root = temp_root("cleanup");
+        write_legacy(
+            &root,
+            "kairia",
+            "reviewer",
+            "OPENAI_API_KEY=shared-placeholder\n",
+        );
+        write_legacy(
+            &root,
+            "kairia",
+            "writer",
+            "OPENAI_API_KEY=shared-placeholder\n",
+        );
+        let backend = MemoryCredentialBackend::new();
+        let store = EnvStore::with_credential_backend(root.clone(), "kairia", backend);
+
+        store.migrate_legacy_variables().expect("migrate legacy");
+        let summary = store.cleanup_legacy_variables().expect("cleanup legacy");
+
+        assert_eq!(summary.cleaned.len(), 1);
+        assert_eq!(summary.cleaned[0].name, "OPENAI_API_KEY");
+        assert_eq!(summary.cleaned[0].skills, vec!["reviewer", "writer"]);
+        assert_eq!(summary.removed_files, vec!["reviewer", "writer"]);
+        assert!(store
+            .list_legacy_env_vars()
+            .expect("list legacy after cleanup")
+            .is_empty());
+    }
+
+    #[test]
+    fn keeps_legacy_values_that_do_not_match_org_storage() {
+        let root = temp_root("cleanup-mismatch");
+        write_legacy(
+            &root,
+            "kairia",
+            "reviewer",
+            "GITHUB_TOKEN=old-placeholder\n",
+        );
+        let backend = MemoryCredentialBackend::new();
+        let store = EnvStore::with_credential_backend(root.clone(), "kairia", backend);
+
+        store
+            .set_variable("GITHUB_TOKEN", "canonical-placeholder")
+            .expect("set canonical value");
+        let summary = store.cleanup_legacy_variables().expect("cleanup legacy");
+
+        assert!(summary.cleaned.is_empty());
+        assert!(summary.removed_files.is_empty());
+        assert_eq!(summary.skipped.len(), 1);
+        assert_eq!(summary.skipped[0].name, "GITHUB_TOKEN");
+        assert_eq!(
+            fs::read_to_string(root.join("kairia").join("reviewer.env"))
+                .expect("legacy file should remain"),
+            "GITHUB_TOKEN=old-placeholder\n"
+        );
     }
 
     #[test]

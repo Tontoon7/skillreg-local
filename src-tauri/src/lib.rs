@@ -74,6 +74,7 @@ pub fn run() {
             commands::env::list_all_env_vars,
             commands::env::preview_legacy_env_migration,
             commands::env::migrate_legacy_env_vars,
+            commands::env::cleanup_legacy_env_vars,
             commands::env::migrate_org_env_file_to_secure_store,
             commands::env::import_env_file,
         ])

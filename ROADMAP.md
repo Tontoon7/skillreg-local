@@ -108,7 +108,7 @@
 - [x] Garder `variables.env` comme fallback permissionné si le secure store est indisponible
 - [x] Ajouter une migration explicite du fallback Phase 2 vers le secure store
 - [x] Afficher le backend de stockage dans Environment
-- [ ] Ajouter une stratégie de cleanup explicite pour les fichiers legacy migrés
+- [x] Ajouter une stratégie de cleanup explicite pour les fichiers legacy migrés
 
 ---
 

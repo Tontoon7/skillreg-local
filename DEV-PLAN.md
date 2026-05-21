@@ -264,6 +264,10 @@ fn migrate_legacy_env_vars(org: String) -> Result<EnvMigrationSummary, String>
 // Migrate only non-conflicting legacy values; keep old files as backup
 
 #[tauri::command]
+fn cleanup_legacy_env_vars(org: String) -> Result<LegacyCleanupSummary, String>
+// Delete legacy values only when they exactly match the org-level stored value
+
+#[tauri::command]
 fn migrate_org_env_file_to_secure_store(org: String) -> Result<SecureStoreMigrationSummary, String>
 // Explicitly move Phase 2 fallback values from variables.env to the OS secure store
 
@@ -626,7 +630,7 @@ open = "5"                         # Ouvrir URL dans le navigateur
 - [x] Warnings pour vars manquantes
 - [x] Injection ${VAR} dans le scan local
 - [x] Phase 2 Env Engine : stockage org-level temporaire dans `variables.env`, migration legacy sûre, conflits visibles
-- [x] Phase 3 Env Engine : stockage OS secure store, index sans secrets, fallback fichier explicite
+- [x] Phase 3 Env Engine : stockage OS secure store, index sans secrets, fallback fichier explicite, cleanup legacy sûr
 - [x] Page settings : org, agent, scope, theme, sign out
 - [x] Thème clair/sombre (toggle manuel + persistence localStorage)
 
