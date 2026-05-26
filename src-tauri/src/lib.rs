@@ -1,10 +1,19 @@
 mod commands;
 
 use tauri::{
-    menu::{Menu, MenuItem},
-    tray::TrayIconBuilder,
-    Manager, WindowEvent,
+    image::Image,
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
+    AppHandle, Manager, Runtime, WindowEvent,
 };
+
+fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -24,25 +33,33 @@ pub fn run() {
                 let _ = window.set_decorations(false);
             }
 
-            // Tray icon
-            let show = MenuItem::with_id(app, "show", "Show SkillReg", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let open = MenuItem::with_id(app, "open", "Open SkillReg", true, None::<&str>)?;
+            let separator = PredefinedMenuItem::separator(app)?;
+            let quit = MenuItem::with_id(app, "quit", "Quit SkillReg", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&open, &separator, &quit])?;
+            let tray_icon = Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
 
             let _tray = TrayIconBuilder::new()
                 .menu(&menu)
+                .show_menu_on_left_click(true)
+                .icon(tray_icon)
+                .icon_as_template(true)
                 .tooltip("SkillReg")
                 .on_menu_event(|app, event| match event.id.as_ref() {
-                    "show" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            window.show().ok();
-                            window.set_focus().ok();
-                        }
-                    }
+                    "open" => show_main_window(app),
                     "quit" => {
                         app.exit(0);
                     }
                     _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        ..
+                    } = event
+                    {
+                        show_main_window(tray.app_handle());
+                    }
                 })
                 .build(app)?;
 
