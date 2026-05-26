@@ -1,6 +1,6 @@
 # SkillReg Local — Roadmap
 
-> Dernière mise à jour : 2026-05-20
+> Dernière mise à jour : 2026-05-26
 
 ---
 
@@ -116,6 +116,7 @@
 
 - [x] Tray icon
 - [x] Auto-update (plugin + keypair + UI banner)
+- [x] Auto-update des skills installés via manifest local et worker tray
 - [x] Icône app (toutes tailles, .icns, .ico)
 - [x] Custom titlebar
 - [x] Notifications OS

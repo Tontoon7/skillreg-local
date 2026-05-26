@@ -1,11 +1,14 @@
 use super::config::read_config;
+use super::installed_manifest::{
+    remove_tracked_installation, upsert_tracked_installation, TrackedInstallation,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-const API_BASE_URL: &str = "https://app.skillreg.dev";
+pub const API_BASE_URL: &str = "https://app.skillreg.dev";
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -105,6 +108,8 @@ pub struct InstallResult {
     pub path: String,
     pub files_count: usize,
     pub env_vars: Vec<super::local::EnvVarDecl>,
+    pub sha256: Option<String>,
+    pub content_hash: String,
 }
 
 fn get_auth_client() -> Result<(reqwest::Client, String), String> {
@@ -246,6 +251,17 @@ pub async fn pull_skill(
     scope: String,
     project_dir: Option<String>,
 ) -> Result<InstallResult, String> {
+    install_skill_from_registry(org, name, version, agent, scope, project_dir).await
+}
+
+pub async fn install_skill_from_registry(
+    org: String,
+    name: String,
+    version: Option<String>,
+    agent: String,
+    scope: String,
+    project_dir: Option<String>,
+) -> Result<InstallResult, String> {
     let (client, token) = get_auth_client()?;
 
     // 1. Get skill info to find download URL and checksum
@@ -275,7 +291,15 @@ pub async fn pull_skill(
     let expected_sha = skill
         .latest_version_data
         .as_ref()
-        .and_then(|v| v.sha256.clone());
+        .filter(|v| v.version == target_version)
+        .and_then(|v| v.sha256.clone())
+        .or_else(|| {
+            skill
+                .versions
+                .iter()
+                .find(|v| v.version == target_version)
+                .and_then(|v| v.sha256.clone())
+        });
 
     // 2. Download tarball
     let download_url = format!(
@@ -359,16 +383,11 @@ pub async fn pull_skill(
     // 6. Parse env vars from installed SKILL.md and return only required values missing
     // from the org-level store. Safe legacy values are migrated first; conflicting
     // legacy values are left untouched and therefore still require user input.
-    let parsed_env_vars = install_dir
-        .join("SKILL.md")
-        .exists()
-        .then(|| {
-            fs::read_to_string(install_dir.join("SKILL.md"))
-                .ok()
-                .map(|c| super::local::parse_env_from_frontmatter(&c))
-                .unwrap_or_default()
-        })
-        .unwrap_or_default();
+    let skill_md_path = install_dir.join("SKILL.md");
+    let skill_md_content = fs::read_to_string(&skill_md_path)
+        .map_err(|e| format!("Installed SKILL.md not found: {}", e))?;
+    let content_hash = super::local::compute_content_hash(&skill_md_content);
+    let parsed_env_vars = super::local::parse_env_from_frontmatter(&skill_md_content);
     let env_store = super::env::EnvStore::new(&org);
     let _ = env_store.migrate_legacy_variables();
     let env_vars = parsed_env_vars
@@ -381,13 +400,40 @@ pub async fn pull_skill(
         })
         .collect();
 
+    let install_path = install_dir.to_string_lossy().into_owned();
+    let now = current_unix_timestamp_string();
+    upsert_tracked_installation(TrackedInstallation {
+        org,
+        name: name.clone(),
+        version: target_version.clone(),
+        agent: agent.clone(),
+        scope: scope.clone(),
+        project_dir,
+        install_path: install_path.clone(),
+        content_hash: content_hash.clone(),
+        sha256: expected_sha.clone(),
+        auto_update_enabled: None,
+        last_checked_at: Some(now.clone()),
+        last_updated_at: Some(now),
+        last_error: None,
+    })?;
+
     Ok(InstallResult {
         name: name.clone(),
         version: target_version,
-        path: install_dir.to_string_lossy().into_owned(),
+        path: install_path,
         files_count: file_count,
         env_vars,
+        sha256: expected_sha,
+        content_hash,
     })
+}
+
+fn current_unix_timestamp_string() -> String {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs().to_string())
+        .unwrap_or_else(|_| "0".to_string())
 }
 
 fn get_install_path(
@@ -431,6 +477,7 @@ pub fn uninstall_skill(
         return Ok(false);
     }
     fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
+    remove_tracked_installation(&name, &agent, &scope, project_dir.as_deref())?;
     Ok(true)
 }
 

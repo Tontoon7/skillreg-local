@@ -3,7 +3,7 @@ mod commands;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    Manager,
+    Manager, WindowEvent,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -13,6 +13,10 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             // On non-macOS, disable native decorations (custom titlebar used instead)
             #[cfg(not(target_os = "macos"))]
@@ -42,11 +46,29 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            if let Ok(config) = commands::config::read_config() {
+                let _ = commands::config::apply_launch_at_login(
+                    app.handle(),
+                    config.launch_at_login_value(),
+                );
+            }
+
+            commands::auto_update::spawn_auto_update_worker(app.handle().clone());
+
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if window.label() == "main" {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::config::read_config,
             commands::config::write_config,
+            commands::config::set_launch_at_login,
             commands::auth::login_initiate,
             commands::auth::login_poll,
             commands::auth::login_with_token,
@@ -64,6 +86,9 @@ pub fn run() {
             commands::skills::push_skill,
             commands::skills::uninstall_skill,
             commands::skills::check_updates,
+            commands::installed_manifest::list_tracked_installations,
+            commands::installed_manifest::set_skill_auto_update,
+            commands::auto_update::run_auto_update_now,
             commands::env::get_env_vars,
             commands::env::get_org_env_var,
             commands::env::set_env_vars,

@@ -7,9 +7,11 @@ import {
 	listOrgEnvVars,
 	listSkillProposals,
 	listSkills,
+	listTrackedInstallations,
 	previewLegacyEnvMigration,
 	pullSkill,
 	scanLocalSkills,
+	setSkillAutoUpdate,
 	uninstallSkill,
 } from "@/lib/api";
 import {
@@ -34,6 +36,7 @@ import type {
 	ProposalSummary,
 	RegistrySkill,
 	SyncStatus,
+	TrackedInstallation,
 	UpdateInfo,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -76,6 +79,10 @@ function timeAgo(value: string): string {
 type AgentFilter = "claude" | "codex" | "cursor";
 type ScopeFilter = "project" | "user";
 type InstalledSyncStatus = SyncStatus | "checking";
+type TrackedInstallationLookup = {
+	byPath: Record<string, TrackedInstallation>;
+	byKey: Record<string, TrackedInstallation>;
+};
 
 const AGENTS: AgentFilter[] = ["claude", "codex", "cursor"];
 const SCOPES: ScopeFilter[] = ["project", "user"];
@@ -125,18 +132,22 @@ function getUpdatesFromRegistry(
 function getSyncStatus(
 	skill: LocalSkill,
 	updates: UpdateInfo[],
-	registrySkills: RegistrySkillLookup,
 	registryLoading: boolean,
+	trackedLookup: TrackedInstallationLookup,
 ): InstalledSyncStatus {
 	if (registryLoading) return "checking";
+
+	const tracked = getTrackedInstallation(skill, trackedLookup);
+	if (!tracked) return "local_only";
+	if (tracked.contentHash !== skill.content_hash) return "managed_modified_locally";
+	if (tracked.autoUpdateEnabled === false) return "managed_auto_update_disabled";
 
 	const hasUpdate = updates.some(
 		(u) => u.name === skill.name && u.agent === skill.agent && u.scope === skill.scope,
 	);
-	if (hasUpdate) return "update_available";
+	if (hasUpdate) return "managed_update_available";
 
-	if (getRegistrySkillForLocal(skill, registrySkills)?.latestVersion) return "synced";
-	return "unknown";
+	return "managed_synced";
 }
 
 function StatusBadge({ status, update }: { status: InstalledSyncStatus; update?: UpdateInfo }) {
@@ -148,21 +159,35 @@ function StatusBadge({ status, update }: { status: InstalledSyncStatus; update?:
 					Checking
 				</span>
 			);
-		case "synced":
+		case "managed_synced":
 			return (
 				<span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400 border border-emerald-500/20">
 					<Check className="size-3" />
 					Up to date
 				</span>
 			);
-		case "update_available":
+		case "managed_update_available":
 			return (
 				<span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-400 border border-amber-500/20">
 					<ArrowUpCircle className="size-3" />
 					{update ? `${update.localVersion} → ${update.serverVersion}` : "Update"}
 				</span>
 			);
-		case "unknown":
+		case "managed_modified_locally":
+			return (
+				<span className="inline-flex items-center gap-1 rounded-full bg-orange-500/10 px-2 py-0.5 text-[11px] font-medium text-orange-400 border border-orange-500/20">
+					<AlertCircle className="size-3" />
+					Modified locally
+				</span>
+			);
+		case "managed_auto_update_disabled":
+			return (
+				<span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground border border-border">
+					<RefreshCw className="size-3" />
+					Auto-update off
+				</span>
+			);
+		case "local_only":
 			return (
 				<span className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-400 border border-blue-500/20">
 					<HardDrive className="size-3" />
@@ -213,6 +238,27 @@ function getInstallKey(skill: LocalSkill): string {
 	return `${skill.agent}:${skill.scope}:${skill.name}`;
 }
 
+function createTrackedInstallationLookup(
+	installations: TrackedInstallation[],
+): TrackedInstallationLookup {
+	return installations.reduce<TrackedInstallationLookup>(
+		(lookup, installation) => {
+			lookup.byPath[installation.installPath] = installation;
+			lookup.byKey[`${installation.agent}:${installation.scope}:${installation.name}`] =
+				installation;
+			return lookup;
+		},
+		{ byPath: {}, byKey: {} },
+	);
+}
+
+function getTrackedInstallation(
+	skill: LocalSkill,
+	lookup: TrackedInstallationLookup,
+): TrackedInstallation | undefined {
+	return lookup.byPath[skill.path] ?? lookup.byKey[getInstallKey(skill)];
+}
+
 function getVersionLabel(group: InstalledSkillGroup): string {
 	const versions = [...new Set(group.installations.map((skill) => skill.version))];
 	if (versions.length === 1) return versions[0] ?? "-";
@@ -223,6 +269,7 @@ export function Installed() {
 	const org = useConfigStore((s) => s.config.org);
 	const [skills, setSkills] = useState<LocalSkill[]>([]);
 	const [updates, setUpdates] = useState<UpdateInfo[]>([]);
+	const [trackedInstallations, setTrackedInstallations] = useState<TrackedInstallation[]>([]);
 	const [orgEnvVars, setOrgEnvVars] = useState<OrgEnvVariable[]>([]);
 	const [migrationSummary, setMigrationSummary] = useState<EnvMigrationSummary | null>(null);
 	const [registrySkills, setRegistrySkills] = useState<RegistrySkillLookup>({});
@@ -304,12 +351,14 @@ export function Installed() {
 		setRegistryLoading(false);
 		setError(null);
 		try {
-			const [result, orgVars, migration] = await Promise.all([
+			const [result, tracked, orgVars, migration] = await Promise.all([
 				scanLocalSkills(),
+				listTrackedInstallations().catch(() => []),
 				org ? listOrgEnvVars(org).catch(() => []) : Promise.resolve([]),
 				org ? previewLegacyEnvMigration(org).catch(() => null) : Promise.resolve(null),
 			]);
 			setSkills(result);
+			setTrackedInstallations(tracked);
 			setOrgEnvVars(orgVars);
 			setMigrationSummary(migration);
 			setLoading(false);
@@ -368,6 +417,10 @@ export function Installed() {
 
 	const groupedSkills = useMemo(() => groupInstalledSkills(filteredSkills), [filteredSkills]);
 	const totalSkillGroups = useMemo(() => groupInstalledSkills(skills).length, [skills]);
+	const trackedLookup = useMemo(
+		() => createTrackedInstallationLookup(trackedInstallations),
+		[trackedInstallations],
+	);
 	const envInventory = useMemo(() => {
 		if (!org) return null;
 		return buildEnvInventory({
@@ -383,10 +436,10 @@ export function Installed() {
 		const localOnly = registryLoading
 			? 0
 			: groupInstalledSkills(
-					skills.filter((s) => getLocalSkillAction(s, registrySkills) === "publish"),
+					skills.filter((skill) => !getTrackedInstallation(skill, trackedLookup)),
 				).length;
 		return { total: totalSkillGroups, installations: skills.length, updateCount, localOnly };
-	}, [skills, updates, registrySkills, registryLoading, totalSkillGroups]);
+	}, [skills, updates, trackedLookup, registryLoading, totalSkillGroups]);
 
 	const presentAgents = useMemo(
 		() => AGENTS.filter((a) => skills.some((s) => s.agent === a)),
@@ -402,13 +455,17 @@ export function Installed() {
 
 	const handleUninstall = async (skill: LocalSkill) => {
 		const key = getInstallKey(skill);
+		const tracked = getTrackedInstallation(skill, trackedLookup);
 		setActionLoading(key);
 		try {
-			await uninstallSkill(skill.name, skill.agent, skill.scope);
+			await uninstallSkill(skill.name, skill.agent, skill.scope, tracked?.projectDir ?? undefined);
 			setSkills((prev) =>
 				prev.filter(
 					(s) => !(s.name === skill.name && s.agent === skill.agent && s.scope === skill.scope),
 				),
+			);
+			setTrackedInstallations((prev) =>
+				prev.filter((installation) => installation.installPath !== skill.path),
 			);
 			notify("Skill uninstalled", skill.name);
 		} catch (e) {
@@ -418,9 +475,10 @@ export function Installed() {
 		}
 	};
 
-	const handleUpdate = async (update: UpdateInfo) => {
+	const handleUpdate = async (skill: LocalSkill, update: UpdateInfo) => {
 		if (!org) return;
 		const key = `${update.agent}:${update.scope}:${update.name}`;
+		const tracked = getTrackedInstallation(skill, trackedLookup);
 		setActionLoading(key);
 		try {
 			await pullSkill({
@@ -429,6 +487,7 @@ export function Installed() {
 				version: update.serverVersion,
 				agent: update.agent,
 				scope: update.scope,
+				projectDir: tracked?.projectDir ?? undefined,
 			});
 			setUpdates((prev) => prev.filter((u) => u.name !== update.name));
 			await load();
@@ -444,6 +503,35 @@ export function Installed() {
 		updates.find(
 			(u) => u.name === skill.name && u.agent === skill.agent && u.scope === skill.scope,
 		);
+
+	const handleToggleAutoUpdate = async (skill: LocalSkill, enabled: boolean) => {
+		const tracked = getTrackedInstallation(skill, trackedLookup);
+		if (!tracked) return;
+
+		const key = getInstallKey(skill);
+		setActionLoading(key);
+		try {
+			await setSkillAutoUpdate({
+				org: tracked.org,
+				name: tracked.name,
+				agent: tracked.agent,
+				scope: tracked.scope,
+				projectDir: tracked.projectDir,
+				enabled,
+			});
+			setTrackedInstallations((prev) =>
+				prev.map((installation) =>
+					installation.installPath === tracked.installPath
+						? { ...installation, autoUpdateEnabled: enabled }
+						: installation,
+				),
+			);
+		} catch (e) {
+			notify("Operation failed", typeof e === "string" ? e : "Auto-update setting failed");
+		} finally {
+			setActionLoading(null);
+		}
+	};
 
 	const getProposalTone = (status: ProposalSummary["status"]) => {
 		switch (status) {
@@ -611,17 +699,20 @@ export function Installed() {
 								const groupUpdates = group.installations
 									.map((skill) => getUpdate(skill))
 									.filter((update): update is UpdateInfo => Boolean(update));
-								const groupStatus: InstalledSyncStatus =
-									registryLoading && !!org
-										? "checking"
-										: groupUpdates.length > 0
-											? "update_available"
-											: group.installations.some(
-														(skill) =>
-															getRegistrySkillForLocal(skill, registrySkills)?.latestVersion,
-													)
-												? "synced"
-												: "unknown";
+								const installationStatuses = group.installations.map((skill) =>
+									getSyncStatus(skill, updates, registryLoading && !!org, trackedLookup),
+								);
+								const groupStatus: InstalledSyncStatus = installationStatuses.includes("checking")
+									? "checking"
+									: installationStatuses.includes("managed_modified_locally")
+										? "managed_modified_locally"
+										: installationStatuses.includes("managed_update_available")
+											? "managed_update_available"
+											: installationStatuses.includes("managed_auto_update_disabled")
+												? "managed_auto_update_disabled"
+												: installationStatuses.every((status) => status === "managed_synced")
+													? "managed_synced"
+													: "local_only";
 								const primaryAction = registryLoading
 									? null
 									: getLocalSkillAction(primarySkill, registrySkills);
@@ -728,14 +819,16 @@ export function Installed() {
 										<div className="mt-3 flex flex-col gap-1.5">
 											{group.installations.map((skill) => {
 												const update = getUpdate(skill);
+												const tracked = getTrackedInstallation(skill, trackedLookup);
 												const status = getSyncStatus(
 													skill,
 													updates,
-													registrySkills,
 													registryLoading && !!org,
+													trackedLookup,
 												);
 												const key = getInstallKey(skill);
 												const isLoading = actionLoading === key;
+												const autoUpdateEnabled = tracked?.autoUpdateEnabled !== false;
 
 												return (
 													<div
@@ -752,12 +845,23 @@ export function Installed() {
 															</span>
 														</div>
 														<div className="flex shrink-0 items-center gap-1.5">
-															{update && (
+															{tracked && (
 																<Button
 																	variant="outline"
 																	size="sm"
 																	disabled={isLoading}
-																	onClick={() => handleUpdate(update)}
+																	onClick={() => handleToggleAutoUpdate(skill, !autoUpdateEnabled)}
+																>
+																	<RefreshCw className="size-3.5" />
+																	{autoUpdateEnabled ? "Auto-update on" : "Auto-update off"}
+																</Button>
+															)}
+															{tracked && update && (
+																<Button
+																	variant="outline"
+																	size="sm"
+																	disabled={isLoading}
+																	onClick={() => handleUpdate(skill, update)}
 																	className="text-accent"
 																>
 																	{isLoading ? (

@@ -6,6 +6,7 @@ import type {
 	SecureStoreMigrationSummary,
 } from "./env-inventory";
 import type {
+	AutoUpdateRunSummary,
 	DeviceFlowResponse,
 	InstallResult,
 	LocalSkill,
@@ -17,6 +18,7 @@ import type {
 	SearchResponse,
 	SkillDetail,
 	SkillregConfig,
+	TrackedInstallation,
 	UpdateInfo,
 	WhoamiResponse,
 } from "./types";
@@ -24,6 +26,8 @@ import type {
 // Config
 export const readConfig = () => invoke<SkillregConfig>("read_config");
 export const writeConfig = (config: SkillregConfig) => invoke<void>("write_config", { config });
+export const setLaunchAtLogin = (enabled: boolean) =>
+	invoke<void>("set_launch_at_login", { enabled });
 
 // Auth — all HTTP goes through Rust
 export const loginInitiate = () => invoke<DeviceFlowResponse>("login_initiate");
@@ -83,6 +87,20 @@ export const uninstallSkill = (name: string, agent: string, scope: string, proje
 
 export const checkUpdates = (org: string, localSkills: LocalSkill[]) =>
 	invoke<UpdateInfo[]>("check_updates", { org, localSkills });
+
+export const listTrackedInstallations = () =>
+	invoke<TrackedInstallation[]>("list_tracked_installations");
+
+export const setSkillAutoUpdate = (params: {
+	org: string;
+	name: string;
+	agent: string;
+	scope: string;
+	projectDir?: string | null;
+	enabled: boolean;
+}) => invoke<void>("set_skill_auto_update", params);
+
+export const runAutoUpdateNow = () => invoke<AutoUpdateRunSummary>("run_auto_update_now");
 
 // Skills (local filesystem)
 export const scanLocalSkills = (agent?: string, scope?: string) =>

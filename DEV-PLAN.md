@@ -509,7 +509,8 @@ L'app desktop utilise exactement les mêmes fichiers que le CLI :
 
 | Fichier | Contenu |
 |---------|---------|
-| `~/.skillreg/config.json` | Token, apiUrl, org par défaut, agent, scope, setupDone |
+| `~/.skillreg/config.json` | Token, apiUrl, org par défaut, agent, scope, setupDone, autoUpdateEnabled, autoUpdateIntervalMinutes, launchAtLogin |
+| `~/.skillreg/installed.json` | Manifest local des skills installés via SkillReg : org, nom, version, agent, scope, chemin, hash du `SKILL.md`, checksum tarball, opt-out auto-update, timestamps et dernière erreur. |
 | `.skillregrc` | Config par projet (org, skills) |
 | OS credential store | Valeurs org-level locales via macOS Keychain, Windows Credential Manager ou Linux Secret Service. |
 | `~/.skillreg/env/{org}/index.json` | Métadonnées sans secrets : noms de variables, statut configuré, backend de stockage, timestamps. |
@@ -524,6 +525,16 @@ codex:   .codex/skills/  (project)  ~/.codex/skills/  (user)
 cursor:  .cursor/skills/ (project)  ~/.cursor/skills/ (user)
 ```
 
+### Auto-update des skills installés
+
+SkillReg Local reste résident dans le tray/menu bar quand la fenêtre est fermée. Le bouton Quit du tray arrête explicitement le process et donc le worker d'auto-update.
+
+Par défaut, l'app démarre à la connexion utilisateur et vérifie les skills toutes les 60 minutes. Ces réglages sont stockés dans `~/.skillreg/config.json` et peuvent être désactivés dans Settings. Les valeurs absentes gardent le comportement par défaut sans réécrire le fichier de config.
+
+Le worker ne met à jour automatiquement que les installations suivies dans `~/.skillreg/installed.json`. Avant d'écraser un skill, il vérifie que le hash actuel du `SKILL.md` correspond au hash enregistré lors de la dernière installation SkillReg, qu'une version approuvée plus récente existe côté registry, et que le checksum SHA-256 du tarball téléchargé correspond au checksum serveur quand il est fourni. Un skill modifié localement est ignoré.
+
+Après un run avec mises à jour, SkillReg envoie une notification OS et émet l'événement frontend `auto-update:completed`. Les erreurs sont enregistrées dans le manifest et exposées à l'UI sans spam de notifications.
+
 ---
 
 ## 8. Dépendances Rust
@@ -533,6 +544,7 @@ cursor:  .cursor/skills/ (project)  ~/.cursor/skills/ (user)
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-shell = "2"           # Ouvrir le navigateur
 tauri-plugin-dialog = "2"          # File picker natif
+tauri-plugin-autostart = "2"       # Launch at login
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
@@ -637,9 +649,10 @@ open = "5"                         # Ouvrir URL dans le navigateur
 ### Phase 6 — Polish + Packaging ✅ (partiel)
 - [x] Tray icon (menubar macOS, system tray Windows)
 - [x] Auto-update (config Tauri updater plugin)
+- [x] Auto-update des skills installés via manifest local et worker tray
 - [x] Icône app (toutes tailles: .icns, .ico, .png)
 - [x] Custom titlebar (draggable, boutons min/max/close)
-- [ ] Notifications OS (install success, update available)
+- [x] Notifications OS (install success, auto-update completed)
 - [x] Packaging config : `.dmg` (macOS), `.msi` (Windows), `.AppImage` (Linux)
 - [x] GitHub Actions CI/CD : build cross-platform
 - [x] Releases macOS signées + notarized en CI (nécessite secrets Apple GitHub)
@@ -656,7 +669,7 @@ open = "5"                         # Ouvrir URL dans le navigateur
 | Phase 3 — Catalog + Install | ✅ 100% |
 | Phase 4 — Local + Publish | ✅ 100% |
 | Phase 5 — Env Vars + Settings | ✅ 100% |
-| Phase 6 — Polish + Packaging | 🔶 ~85% (notifications OS, code signing, page dl restants) |
+| Phase 6 — Polish + Packaging | 🔶 ~90% (page téléchargement restante) |
 
 ---
 
@@ -678,6 +691,7 @@ Un développeur peut push via le CLI et les non-techniques installent via l'app.
 - Tokens stockés dans `~/.skillreg/config.json` (même que le CLI)
 - Env vars stockées dans le secure store OS quand disponible ; `variables.env` reste uniquement fallback local permissionné
 - Checksum SHA-256 vérifié à chaque download
+- Auto-update des skills bloqué si le contenu local ne correspond plus au hash enregistré
 - react-markdown pour le rendu markdown
 - Pas de secrets en clair dans l'UI (masquage des tokens et env vars)
 - Auto-update signé (Tauri updater avec signature — endpoint configuré)

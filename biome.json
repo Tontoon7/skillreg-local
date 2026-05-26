@@ -11,6 +11,6 @@
 		"rules": { "recommended": true }
 	},
 	"files": {
-		"ignore": ["src-tauri/", "dist/", "node_modules/"]
+		"ignore": ["src-tauri/", "dist/", "node_modules/", ".claude/"]
 	}
 }

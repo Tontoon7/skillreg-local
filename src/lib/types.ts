@@ -9,6 +9,9 @@ export interface SkillregConfig {
 	defaultAgent?: AgentType;
 	defaultScope?: ScopeType;
 	setupDone?: boolean;
+	autoUpdateEnabled?: boolean;
+	autoUpdateIntervalMinutes?: number;
+	launchAtLogin?: boolean;
 }
 
 // Auth
@@ -115,6 +118,8 @@ export interface InstallResult {
 	path: string;
 	filesCount: number;
 	envVars: EnvVarDecl[];
+	sha256: string | null;
+	contentHash: string;
 }
 
 export interface PushResult {
@@ -131,6 +136,47 @@ export interface UpdateInfo {
 	serverVersion: string;
 	agent: string;
 	scope: string;
+}
+
+export interface TrackedInstallation {
+	org: string;
+	name: string;
+	version: string;
+	agent: AgentType;
+	scope: ScopeType;
+	projectDir: string | null;
+	installPath: string;
+	contentHash: string;
+	sha256: string | null;
+	autoUpdateEnabled: boolean | null;
+	lastCheckedAt: string | null;
+	lastUpdatedAt: string | null;
+	lastError: string | null;
+}
+
+export interface AutoUpdatedSkill {
+	name: string;
+	agent: string;
+	scope: string;
+	oldVersion: string;
+	newVersion: string;
+}
+
+export interface AutoUpdateSkippedSkill {
+	name: string;
+	agent: string;
+	scope: string;
+	version: string;
+	reason: string;
+}
+
+export interface AutoUpdateRunSummary {
+	checked: number;
+	updated: number;
+	skipped: number;
+	failed: number;
+	updatedSkills: AutoUpdatedSkill[];
+	skippedSkills: AutoUpdateSkippedSkill[];
 }
 
 export interface ProposalActor {
@@ -173,7 +219,12 @@ export interface LocalSkill {
 	env_vars?: EnvVarDecl[];
 }
 
-export type SyncStatus = "synced" | "modified_locally" | "update_available" | "unknown";
+export type SyncStatus =
+	| "managed_synced"
+	| "managed_update_available"
+	| "managed_modified_locally"
+	| "managed_auto_update_disabled"
+	| "local_only";
 
 export interface LocalSkillWithSync extends LocalSkill {
 	syncStatus: SyncStatus;

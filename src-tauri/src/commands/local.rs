@@ -63,7 +63,7 @@ pub struct LocalSkill {
     pub env_vars: Vec<EnvVarDecl>,
 }
 
-fn compute_sha256(content: &str) -> String {
+pub fn compute_content_hash(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
     format!("{:x}", hasher.finalize())
@@ -364,7 +364,7 @@ pub fn scan_local_skills(
 
                 if let Some(md) = md_path {
                     let content = fs::read_to_string(&md).unwrap_or_default();
-                    let hash = compute_sha256(&content);
+                    let hash = compute_content_hash(&content);
                     let fm = parse_frontmatter(&content);
                     let tags = parse_tags(&content);
                     let env_vars = parse_env_from_frontmatter(&content);
