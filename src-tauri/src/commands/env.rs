@@ -327,9 +327,14 @@ impl CredentialBackend for FailingCredentialBackend {
     }
 }
 
+fn default_configured() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct EnvIndexVariable {
+    #[serde(default = "default_configured")]
     configured: bool,
     updated_at: Option<String>,
     storage: String,
@@ -1158,6 +1163,43 @@ mod tests {
         assert!(
             root.join("kairia").join("variables.env").exists(),
             "fallback storage should use variables.env"
+        );
+    }
+
+    #[test]
+    fn reads_existing_index_entries_that_do_not_include_configured_flag() {
+        let root = temp_root("legacy-index");
+        fs::create_dir_all(root.join("kairia")).expect("create org dir");
+        fs::write(
+            root.join("kairia").join("index.json"),
+            r#"{
+  "version": 1,
+  "variables": {
+    "OPENAI_API_KEY": {
+      "updatedAt": "2026-05-20T18:42:59.076Z",
+      "storage": "fallback_file"
+    }
+  }
+}"#,
+        )
+        .expect("write legacy index");
+        fs::write(
+            root.join("kairia").join("variables.env"),
+            "OPENAI_API_KEY=legacy-placeholder\n",
+        )
+        .expect("write fallback env file");
+        let store = EnvStore::with_root(root, "kairia");
+
+        let summaries = store
+            .list_variable_summaries()
+            .expect("legacy index should remain readable");
+
+        assert_eq!(
+            summaries
+                .iter()
+                .map(|item| (item.name.as_str(), item.configured, item.storage.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("OPENAI_API_KEY", true, "fallback_file")]
         );
     }
 
