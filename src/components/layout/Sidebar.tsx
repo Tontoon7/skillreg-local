@@ -1,12 +1,13 @@
 import { SkillRegLogo } from "@/components/SkillRegLogo";
 import { useAuthStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
-import { FolderOpen, Key, LayoutDashboard, Package, Settings } from "lucide-react";
+import { FolderOpen, Key, LayoutDashboard, Package, Settings, Terminal } from "lucide-react";
 import { NavLink } from "react-router";
 
 const NAV_ITEMS = [
 	{ to: "/", label: "Dashboard", icon: LayoutDashboard },
 	{ to: "/catalog", label: "Catalog", icon: Package },
+	{ to: "/commands", label: "Commands", icon: Terminal },
 	{ to: "/installed", label: "Installed", icon: FolderOpen },
 	{ to: "/env", label: "Env Vars", icon: Key },
 	{ to: "/settings", label: "Settings", icon: Settings },

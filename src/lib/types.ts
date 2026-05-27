@@ -138,6 +138,68 @@ export interface UpdateInfo {
 	scope: string;
 }
 
+export interface RegistryCommand {
+	id?: string | null;
+	name: string;
+	description: string;
+	latestVersion: string | null;
+	totalVersions: number;
+	agentCompatibility: AgentType[];
+	scope: string;
+}
+
+export interface CommandVersion {
+	id?: string | null;
+	version: string;
+	content: string;
+	agentCompatibility: AgentType[];
+	scope?: string | null;
+}
+
+export interface RegistryCommandDetail extends RegistryCommand {
+	versions: CommandVersion[];
+}
+
+export interface InstalledCommandRecord {
+	org: string;
+	name: string;
+	version: string;
+	agent: AgentType;
+	scope: ScopeType;
+	path: string;
+	contentSha256: string;
+	installedAt: string;
+}
+
+export interface CommandInstallResult {
+	org: string;
+	name: string;
+	version: string;
+	scope: ScopeType;
+	paths: string[];
+}
+
+export interface CommandUpdateSkipped {
+	org: string;
+	name: string;
+	version: string;
+	agent: AgentType;
+	scope: ScopeType;
+	path: string;
+	contentSha256: string;
+	installedAt: string;
+	reason: string;
+}
+
+export interface CommandUpdateResult {
+	updated: InstalledCommandRecord[];
+	skipped: CommandUpdateSkipped[];
+}
+
+export interface CommandRemoveResult {
+	removed: InstalledCommandRecord[];
+}
+
 export interface TrackedInstallation {
 	org: string;
 	name: string;

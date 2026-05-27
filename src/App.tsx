@@ -4,6 +4,7 @@ import { Navigate, Route, Routes } from "react-router";
 import { AppShell } from "./components/layout/AppShell";
 import { useAuthStore, useConfigStore } from "./lib/store";
 import { Catalog } from "./pages/Catalog";
+import { Commands } from "./pages/Commands";
 import { Dashboard } from "./pages/Dashboard";
 import { EnvVars } from "./pages/EnvVars";
 import { Installed } from "./pages/Installed";
@@ -56,6 +57,7 @@ export function App() {
 							<Route path="/" element={<Dashboard />} />
 							<Route path="/catalog" element={<Catalog />} />
 							<Route path="/catalog/:name" element={<SkillDetailPage />} />
+							<Route path="/commands" element={<Commands />} />
 							<Route path="/installed" element={<Installed />} />
 							<Route path="/env" element={<EnvVars />} />
 							<Route path="/settings" element={<Settings />} />

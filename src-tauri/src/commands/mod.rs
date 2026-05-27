@@ -6,3 +6,4 @@ pub mod env;
 pub mod installed_manifest;
 pub mod local;
 pub mod skills;
+pub mod slash_commands;

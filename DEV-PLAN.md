@@ -59,6 +59,7 @@ skillreg-local/
 │   │   │   ├── mod.rs          ← Module exports (auth, config, env, local, skills)
 │   │   │   ├── auth.rs         ← login_initiate, login_poll, login_with_token, whoami, logout, open_url
 │   │   │   ├── skills.rs       ← list_skills, get_skill, search_skills, pull_skill, push_skill, uninstall_skill, check_updates
+│   │   │   ├── slash_commands.rs ← registry/local slash command install, update, remove
 │   │   │   ├── local.rs        ← scan_local_skills, parse_frontmatter
 │   │   │   ├── config.rs       ← read_config, write_config
 │   │   │   └── env.rs          ← EnvStore org-level + legacy env commands
@@ -74,6 +75,7 @@ skillreg-local/
 │   │   ├── Dashboard.tsx       ← Orgs overview (cards cliquables)
 │   │   ├── Catalog.tsx         ← Browse/search skills + pagination + SkillCard inline
 │   │   ├── SkillDetail.tsx     ← Detail + 3 tabs (readme/versions/files) + install sidebar
+│   │   ├── Commands.tsx        ← Browse/install/update/remove slash commands
 │   │   ├── Installed.tsx       ← Local skills groupés par agent/scope + update + uninstall
 │   │   ├── Publish.tsx         ← Push skill (file picker dialog + preview + dry-run)
 │   │   ├── EnvVars.tsx         ← Env vars CRUD + masking + import .env
@@ -124,6 +126,8 @@ L'app desktop consomme la même API REST que le CLI. Base URL hardcodée : `http
 | **Versions** | `/api/v1/orgs/{org}/skills/{name}/versions` | GET | Token | Lister versions |
 | | `/api/v1/orgs/{org}/skills/{name}/versions` | POST | Token | Publier version |
 | | `/api/v1/orgs/{org}/skills/{name}/versions/{v}/download` | GET | Token | Télécharger tarball |
+| **Commands** | `/api/v1/orgs/{org}/commands` | GET | Token | Lister slash commands |
+| | `/api/v1/orgs/{org}/commands/{name}` | GET | Token | Détail + versions d'une command |
 | **Search** | `/api/v1/search` | GET | Non | Recherche full-text |
 | **Tokens** | `/api/v1/orgs/{org}/tokens` | GET/POST | Token | Lister/créer tokens |
 | | `/api/v1/orgs/{org}/tokens/{id}` | DELETE | Token | Révoquer token |

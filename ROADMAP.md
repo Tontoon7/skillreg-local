@@ -69,6 +69,15 @@
 - [x] Upload + progress bar
 - [x] Security scan warnings
 
+## Slash Commands
+
+- [x] Lister les slash commands du registre depuis l'app desktop
+- [x] Installer une command pour Claude, Codex, Cursor ou tous les agents compatibles
+- [x] Support des chemins locaux commands : `.claude/commands`, `.cursor/commands`, `.codex/skills`
+- [x] Manifest local partagé avec le CLI : `~/.skillreg/commands.json`
+- [x] Vue des commands installées localement avec update et remove
+- [ ] Création/publication de nouvelles versions de commands depuis le desktop
+
 ---
 
 ## Phase 5 — Env Vars + Settings

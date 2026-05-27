@@ -7,14 +7,20 @@ import type {
 } from "./env-inventory";
 import type {
 	AutoUpdateRunSummary,
+	CommandInstallResult,
+	CommandRemoveResult,
+	CommandUpdateResult,
 	DeviceFlowResponse,
 	InstallResult,
+	InstalledCommandRecord,
 	LocalSkill,
 	PaginatedSkills,
 	PollResponse,
 	ProposalDetail,
 	ProposalSummary,
 	PushResult,
+	RegistryCommand,
+	RegistryCommandDetail,
 	SearchResponse,
 	SkillDetail,
 	SkillregConfig,
@@ -87,6 +93,40 @@ export const uninstallSkill = (name: string, agent: string, scope: string, proje
 
 export const checkUpdates = (org: string, localSkills: LocalSkill[]) =>
 	invoke<UpdateInfo[]>("check_updates", { org, localSkills });
+
+// Slash commands
+export const listCommands = (org: string) => invoke<RegistryCommand[]>("list_commands", { org });
+
+export const getCommand = (org: string, name: string) =>
+	invoke<RegistryCommandDetail>("get_command", { org, name });
+
+export const pullCommand = (params: {
+	org: string;
+	name: string;
+	version?: string;
+	agent: string;
+	scope: string;
+	projectDir?: string;
+}) => invoke<CommandInstallResult>("pull_command", params);
+
+export const listLocalCommands = (params?: { org?: string; agent?: string; scope?: string }) =>
+	invoke<InstalledCommandRecord[]>("list_local_commands", params ?? {});
+
+export const removeCommand = (params: {
+	org: string;
+	name: string;
+	agent?: string;
+	scope?: string;
+}) => invoke<CommandRemoveResult>("remove_command", params);
+
+export const updateCommand = (params: {
+	org?: string;
+	name?: string;
+	agent?: string;
+	scope?: string;
+	version?: string;
+	force?: boolean;
+}) => invoke<CommandUpdateResult>("update_command", params);
 
 export const listTrackedInstallations = () =>
 	invoke<TrackedInstallation[]>("list_tracked_installations");
