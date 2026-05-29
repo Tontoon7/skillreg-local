@@ -1,3 +1,4 @@
+use super::api_error::format_api_error;
 use super::config::read_config;
 use super::installed_manifest::{
     remove_tracked_installation, upsert_tracked_installation, TrackedInstallation,
@@ -161,7 +162,7 @@ pub async fn list_skills(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("API error {}: {}", status, body));
+        return Err(format_api_error("API error", status, &body));
     }
 
     resp.json::<PaginatedSkills>()
@@ -186,7 +187,7 @@ pub async fn get_skill(org: String, name: String) -> Result<SkillDetail, String>
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("API error {}: {}", status, body));
+        return Err(format_api_error("API error", status, &body));
     }
 
     let mut skill: SkillDetail = resp
@@ -618,7 +619,7 @@ pub async fn push_skill(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("Upload failed {}: {}", status, body));
+        return Err(format_api_error("Upload failed", status, &body));
     }
 
     Ok(PushResult {

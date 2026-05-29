@@ -1,3 +1,4 @@
+use super::api_error::format_api_error;
 use super::config::read_config;
 use super::local::parse_frontmatter_pub;
 use super::skills::SkillDetail;
@@ -89,7 +90,7 @@ async fn load_current_official_version(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("Skill lookup failed {}: {}", status, body));
+        return Err(format_api_error("Skill lookup failed", status, &body));
     }
 
     let detail = resp
@@ -155,7 +156,7 @@ pub async fn propose_skill_change(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("API error {}: {}", status, body));
+        return Err(format_api_error("API error", status, &body));
     }
 
     resp.json::<ProposalSummary>()
@@ -183,7 +184,7 @@ pub async fn list_skill_proposals(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("API error {}: {}", status, body));
+        return Err(format_api_error("API error", status, &body));
     }
 
     let payload = resp
@@ -214,7 +215,7 @@ pub async fn get_skill_proposal(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("API error {}: {}", status, body));
+        return Err(format_api_error("API error", status, &body));
     }
 
     resp.json::<ProposalDetail>()

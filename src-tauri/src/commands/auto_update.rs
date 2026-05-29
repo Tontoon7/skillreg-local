@@ -1,4 +1,5 @@
 use super::{
+    api_error::format_api_error,
     config::read_config,
     installed_manifest::{
         read_installed_manifest, upsert_tracked_installation, TrackedInstallation,
@@ -260,7 +261,7 @@ async fn fetch_latest_versions_for_org(
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(format!("API error {}: {}", status, body));
+            return Err(format_api_error("API error", status, &body));
         }
 
         let page_data = response

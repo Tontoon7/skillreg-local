@@ -1,3 +1,4 @@
+pub mod api_error;
 pub mod auth;
 pub mod auto_update;
 pub mod collaboration;

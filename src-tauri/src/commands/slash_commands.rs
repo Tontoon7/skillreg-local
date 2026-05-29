@@ -1,3 +1,4 @@
+use super::api_error::format_api_error;
 use super::config::read_config;
 use super::skills::API_BASE_URL;
 use serde::{Deserialize, Serialize};
@@ -489,7 +490,7 @@ async fn fetch_command_detail(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("API error {}: {}", status, body));
+        return Err(format_api_error("API error", status, &body));
     }
 
     resp.json::<GetCommandResponse>()
@@ -511,7 +512,7 @@ pub async fn list_commands(org: String) -> Result<Vec<RegistryCommand>, String> 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("API error {}: {}", status, body));
+        return Err(format_api_error("API error", status, &body));
     }
 
     resp.json::<ListCommandsResponse>()
