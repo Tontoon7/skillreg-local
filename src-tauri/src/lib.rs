@@ -63,6 +63,7 @@ pub fn run() {
             commands::skills::pull_skill,
             commands::skills::push_skill,
             commands::skills::uninstall_skill,
+            commands::skills::delete_skill,
             commands::skills::check_updates,
             commands::env::get_env_vars,
             commands::env::get_org_env_var,

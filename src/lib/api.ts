@@ -65,6 +65,9 @@ export const pushSkill = (params: {
 	dryRun: boolean;
 }) => invoke<PushResult>("push_skill", params);
 
+export const deleteSkill = (org: string, name: string) =>
+	invoke<boolean>("delete_skill", { org, name });
+
 export const proposeSkillChange = (params: {
 	org: string;
 	dirPath: string;

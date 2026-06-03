@@ -434,6 +434,30 @@ pub fn uninstall_skill(
     Ok(true)
 }
 
+/// Permanently delete a skill and all its versions from the registry.
+/// Distinct from `uninstall_skill`, which only removes the local copy on disk.
+#[tauri::command]
+pub async fn delete_skill(org: String, name: String) -> Result<bool, String> {
+    let (client, token) = get_auth_client()?;
+    let resp = client
+        .delete(format!(
+            "{}/api/v1/orgs/{}/skills/{}",
+            API_BASE_URL, org, name
+        ))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Delete failed {}: {}", status, body));
+    }
+
+    Ok(true)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateInfo {

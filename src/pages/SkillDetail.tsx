@@ -1,3 +1,4 @@
+import { DeleteSkillDialog } from "@/components/DeleteSkillDialog";
 import { EnvVarSetupDialog } from "@/components/EnvVarSetupDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,7 @@ import {
 	Hash,
 	Loader2,
 	Package,
+	Trash2,
 	User,
 } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
@@ -119,6 +121,7 @@ function SkillDetailInner() {
 	const [installError, setInstallError] = useState<string | null>(null);
 	const [detectedEnvVars, setDetectedEnvVars] = useState<EnvVarDecl[]>([]);
 	const [showEnvDialog, setShowEnvDialog] = useState(false);
+	const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
 	useEffect(() => {
 		if (!org || !name) return;
@@ -460,6 +463,22 @@ function SkillDetailInner() {
 							</div>
 						</div>
 					)}
+
+					{/* Danger zone — registry deletion (server enforces permissions) */}
+					{org && (
+						<div className="space-y-2 border-t pt-4">
+							<p className="text-xs font-medium text-muted-foreground">Danger zone</p>
+							<Button
+								variant="outline"
+								size="sm"
+								className="w-full justify-start gap-2 border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive"
+								onClick={() => setShowDeleteDialog(true)}
+							>
+								<Trash2 className="size-3.5 shrink-0" />
+								Delete from registry
+							</Button>
+						</div>
+					)}
 				</aside>
 			</div>
 
@@ -470,6 +489,18 @@ function SkillDetailInner() {
 					envVars={detectedEnvVars}
 					onClose={() => setShowEnvDialog(false)}
 					onSaved={() => setShowEnvDialog(false)}
+				/>
+			)}
+
+			{showDeleteDialog && org && name && (
+				<DeleteSkillDialog
+					skillName={name}
+					org={org}
+					onClose={() => setShowDeleteDialog(false)}
+					onDeleted={() => {
+						setShowDeleteDialog(false);
+						navigate("/catalog");
+					}}
 				/>
 			)}
 		</div>
