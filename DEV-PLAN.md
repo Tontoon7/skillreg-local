@@ -58,7 +58,7 @@ skillreg-local/
 │   │   ├── commands/           ← Tauri commands (invoked from frontend)
 │   │   │   ├── mod.rs          ← Module exports (auth, config, env, local, skills)
 │   │   │   ├── auth.rs         ← login_initiate, login_poll, login_with_token, whoami, logout, open_url
-│   │   │   ├── skills.rs       ← list_skills, get_skill, search_skills, pull_skill, push_skill, uninstall_skill, check_updates
+│   │   │   ├── skills.rs       ← list_skills, get_skill, search_skills, pull_skill, push_skill, uninstall_skill, delete_skill, check_updates
 │   │   │   ├── slash_commands.rs ← registry/local slash command install, update, remove
 │   │   │   ├── local.rs        ← scan_local_skills, parse_frontmatter
 │   │   │   ├── config.rs       ← read_config, write_config
@@ -218,7 +218,11 @@ async fn scan_local_skills(agent: Option<String>, scope: Option<String>)
 
 #[tauri::command]
 async fn uninstall_skill(name: String, agent: String, scope: String) -> Result<bool, String>
-// rm -rf the skill directory
+// rm -rf the skill directory (local only)
+
+#[tauri::command]
+async fn delete_skill(org: String, name: String) -> Result<bool, String>
+// DELETE /orgs/{org}/skills/{name} — removes the skill + all versions from the registry
 
 #[tauri::command]
 async fn check_updates(api_url: String, token: String, org: String, local_skills: Vec<LocalSkill>)

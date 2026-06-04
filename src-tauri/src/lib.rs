@@ -102,6 +102,7 @@ pub fn run() {
             commands::skills::pull_skill,
             commands::skills::push_skill,
             commands::skills::uninstall_skill,
+            commands::skills::delete_skill,
             commands::skills::check_updates,
             commands::slash_commands::list_commands,
             commands::slash_commands::get_command,
