@@ -135,7 +135,7 @@ jobs:
         shell: bash
         run: |
           dmgs_found=0
-          team_id="${APPLE_TEAM_ID:-2PYK5649R3}"
+          team_id="${APPLE_TEAM_ID:-65XLRQ2U8B}"
           if [ -z "$APPLE_ID" ] || [ -z "$APPLE_PASSWORD" ]; then
             echo "Missing Apple notarization secrets in DMG step." >&2
             exit 1
