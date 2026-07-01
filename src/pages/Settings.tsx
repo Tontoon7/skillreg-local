@@ -33,7 +33,7 @@ export function Settings() {
 	const [autoUpdateIntervalMinutes, setAutoUpdateIntervalMinutes] = useState(
 		config.autoUpdateIntervalMinutes ?? 60,
 	);
-	const [launchAtLogin, setLaunchAtLoginValue] = useState(config.launchAtLogin ?? true);
+	const [launchAtLogin, setLaunchAtLoginValue] = useState(config.launchAtLogin ?? false);
 
 	useEffect(() => {
 		setOrg(config.org || "");
@@ -41,7 +41,7 @@ export function Settings() {
 		setDefaultScope(config.defaultScope || "project");
 		setAutoUpdateEnabled(config.autoUpdateEnabled ?? true);
 		setAutoUpdateIntervalMinutes(config.autoUpdateIntervalMinutes ?? 60);
-		setLaunchAtLoginValue(config.launchAtLogin ?? true);
+		setLaunchAtLoginValue(config.launchAtLogin ?? false);
 	}, [config]);
 
 	const handleSave = async () => {
@@ -54,6 +54,7 @@ export function Settings() {
 				setupDone: true,
 				autoUpdateEnabled,
 				autoUpdateIntervalMinutes,
+				launchAtLogin,
 			});
 			await setLaunchAtLogin(launchAtLogin);
 		} finally {
