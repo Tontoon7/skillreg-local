@@ -6,7 +6,7 @@ use tauri_plugin_autostart::ManagerExt;
 
 pub const DEFAULT_AUTO_UPDATE_ENABLED: bool = true;
 pub const DEFAULT_AUTO_UPDATE_INTERVAL_MINUTES: u64 = 60;
-pub const DEFAULT_LAUNCH_AT_LOGIN: bool = true;
+pub const DEFAULT_LAUNCH_AT_LOGIN: bool = false;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -82,4 +82,30 @@ pub fn set_launch_at_login(app: AppHandle, enabled: bool) -> Result<(), String> 
     apply_launch_at_login(&app, enabled)?;
     config.launch_at_login = Some(enabled);
     write_config(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn launch_at_login_defaults_to_opt_in_disabled() {
+        let config = SkillregConfig::default();
+        assert!(!config.launch_at_login_value());
+    }
+
+    #[test]
+    fn launch_at_login_honors_explicit_value() {
+        let enabled = SkillregConfig {
+            launch_at_login: Some(true),
+            ..Default::default()
+        };
+        assert!(enabled.launch_at_login_value());
+
+        let disabled = SkillregConfig {
+            launch_at_login: Some(false),
+            ..Default::default()
+        };
+        assert!(!disabled.launch_at_login_value());
+    }
 }
