@@ -99,13 +99,11 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Sign only here; notarization runs once on the DMG via notarytool below.
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npx tauri build ${{ matrix.args }}
 
-      - name: Validate notarized macOS app bundles
+      - name: Validate signed macOS app bundles
         if: startsWith(matrix.platform, 'macos')
         shell: bash
         run: |
@@ -117,8 +115,7 @@ jobs:
 
             echo "Validating $app"
             codesign -dv --verbose=4 "$app"
-            spctl -a -vv "$app"
-            xcrun stapler validate "$app"
+            codesign --verify --deep --strict --verbose=2 "$app"
           done < <(find src-tauri/target -path "*/release/bundle/macos/*.app" -type d)
 
           if [ "$apps_found" -eq 0 ]; then
