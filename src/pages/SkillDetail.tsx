@@ -1,5 +1,6 @@
 import { DeleteSkillDialog } from "@/components/DeleteSkillDialog";
 import { EnvVarSetupDialog } from "@/components/EnvVarSetupDialog";
+import { ValidationBadge } from "@/components/ValidationBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
@@ -218,6 +219,7 @@ function SkillDetailInner() {
 					<div className="flex items-center gap-2">
 						<h1 className="text-lg font-semibold truncate">{skill.name}</h1>
 						{skill.latestVersion && <Badge variant="secondary">{skill.latestVersion}</Badge>}
+						<ValidationBadge level={skill.latestVersionData?.validationLevel} />
 						{skill.isDeprecated && <Badge variant="destructive">Deprecated</Badge>}
 					</div>
 					{skill.description && (

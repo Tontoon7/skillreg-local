@@ -53,6 +53,23 @@ export interface RegistrySkill {
 	updatedAt: string;
 }
 
+export type ValidationLevel = "unvalidated" | "scanned" | "verified" | "certified";
+
+export interface ValidationCheck {
+	id: string;
+	category: "structure" | "security" | "trigger" | "behavior";
+	status: "pass" | "warn" | "fail";
+	message: string;
+}
+
+export interface ValidationResult {
+	level: ValidationLevel;
+	checks: ValidationCheck[];
+	score: number;
+	validatedAt: string;
+	engineVersion: string;
+}
+
 export interface SkillDetail extends RegistrySkill {
 	isDeprecated: boolean;
 	deprecatedMessage: string | null;
@@ -64,6 +81,8 @@ export interface SkillDetail extends RegistrySkill {
 		filesManifest: string[] | null;
 		fileCount: number | null;
 		downloads: number;
+		validationLevel: ValidationLevel | null;
+		validation: ValidationResult | null;
 		createdAt: string;
 	} | null;
 	versions: SkillVersion[];
@@ -76,6 +95,7 @@ export interface SkillVersion {
 	sha256: string | null;
 	downloads: number;
 	status: "approved" | "pending" | "rejected";
+	validationLevel: ValidationLevel | null;
 	createdAt: string;
 }
 
