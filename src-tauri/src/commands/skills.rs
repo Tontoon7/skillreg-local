@@ -36,6 +36,10 @@ pub struct SkillVersionData {
     pub files_manifest: Option<Vec<String>>,
     pub file_count: Option<u64>,
     pub downloads: u64,
+    #[serde(default)]
+    pub validation_level: Option<String>,
+    #[serde(default)]
+    pub validation: Option<serde_json::Value>,
     pub created_at: String,
 }
 
@@ -48,6 +52,8 @@ pub struct SkillVersion {
     pub sha256: Option<String>,
     pub downloads: u64,
     pub status: String,
+    #[serde(default)]
+    pub validation_level: Option<String>,
     pub created_at: String,
 }
 
@@ -255,6 +261,21 @@ pub async fn pull_skill(
     install_skill_from_registry(org, name, version, agent, scope, project_dir).await
 }
 
+/// Reject archive entries that would escape the install directory.
+///
+/// Only plain relative components are allowed: this rules out absolute paths,
+/// Windows drive prefixes, and any `..` traversal.
+pub(crate) fn is_safe_entry_path(path: &std::path::Path) -> bool {
+    use std::path::Component;
+
+    if path.as_os_str().is_empty() {
+        return false;
+    }
+
+    path.components()
+        .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
+}
+
 pub async fn install_skill_from_registry(
     org: String,
     name: String,
@@ -318,22 +339,33 @@ pub async fn install_skill_from_registry(
         return Err(format!("Download failed: {}", dl_resp.status()));
     }
 
+    let header_sha = dl_resp
+        .headers()
+        .get("x-checksum-sha256")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
     let tarball_bytes = dl_resp
         .bytes()
         .await
         .map_err(|e| format!("Download error: {}", e))?;
 
-    // 3. Verify SHA-256
-    if let Some(ref expected) = expected_sha {
-        let mut hasher = Sha256::new();
-        hasher.update(&tarball_bytes);
-        let actual = format!("{:x}", hasher.finalize());
-        if actual != *expected {
-            return Err(format!(
-                "Checksum mismatch: expected {}, got {}",
-                expected, actual
-            ));
-        }
+    // 3. Verify SHA-256. Mandatory: verification used to be skipped whenever the
+    // server returned no checksum, so a stripped header disabled it silently.
+    let expected = header_sha.or(expected_sha).ok_or_else(|| {
+        "No checksum available for this download. Refusing to install unverified content."
+            .to_string()
+    })?;
+
+    let mut hasher = Sha256::new();
+    hasher.update(&tarball_bytes);
+    let actual = format!("{:x}", hasher.finalize());
+    if actual != expected {
+        return Err(format!(
+            "Checksum mismatch: expected {}, got {}",
+            expected, actual
+        ));
     }
 
     // 4. Determine install path
@@ -356,6 +388,15 @@ pub async fn install_skill_from_registry(
             .path()
             .map_err(|e| format!("Path error: {}", e))?
             .into_owned();
+
+        // The install dir was just wiped with remove_dir_all, so an entry that
+        // escapes it does damage rather than merely dropping a stray file.
+        if !is_safe_entry_path(&path) {
+            return Err(format!(
+                "Refusing to extract unsafe path from archive: {}",
+                path.display()
+            ));
+        }
 
         // Flatten: strip first directory component if present
         let dest = if path.components().count() > 1 {
@@ -412,7 +453,8 @@ pub async fn install_skill_from_registry(
         project_dir,
         install_path: install_path.clone(),
         content_hash: content_hash.clone(),
-        sha256: expected_sha.clone(),
+        // Record the checksum that was actually verified, not the advertised one.
+        sha256: Some(expected.clone()),
         auto_update_enabled: None,
         last_checked_at: Some(now.clone()),
         last_updated_at: Some(now),
@@ -425,7 +467,7 @@ pub async fn install_skill_from_registry(
         path: install_path,
         files_count: file_count,
         env_vars,
-        sha256: expected_sha,
+        sha256: Some(expected),
         content_hash,
     })
 }
@@ -748,7 +790,34 @@ fn create_tarball(dir: &Path, skill_version: &str) -> Result<Vec<u8>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::ensure_skill_md_version;
+    use super::{ensure_skill_md_version, is_safe_entry_path};
+    use std::path::Path;
+
+    #[test]
+    fn accepts_ordinary_relative_entry_paths() {
+        assert!(is_safe_entry_path(Path::new("SKILL.md")));
+        assert!(is_safe_entry_path(Path::new("my-skill/SKILL.md")));
+        assert!(is_safe_entry_path(Path::new("./scripts/run.sh")));
+        assert!(is_safe_entry_path(Path::new("docs/v1.2..3/notes.md")));
+    }
+
+    #[test]
+    fn rejects_parent_traversal() {
+        assert!(!is_safe_entry_path(Path::new("../evil.md")));
+        assert!(!is_safe_entry_path(Path::new("skill/../../evil.md")));
+        assert!(!is_safe_entry_path(Path::new("a/b/../../../etc/passwd")));
+    }
+
+    #[test]
+    fn rejects_absolute_paths() {
+        assert!(!is_safe_entry_path(Path::new("/etc/passwd")));
+        assert!(!is_safe_entry_path(Path::new("/")));
+    }
+
+    #[test]
+    fn rejects_empty_path() {
+        assert!(!is_safe_entry_path(Path::new("")));
+    }
 
     #[test]
     fn adds_metadata_version_when_missing() {
