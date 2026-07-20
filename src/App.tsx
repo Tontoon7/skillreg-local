@@ -1,3 +1,4 @@
+import { PublicCatalog } from "@/pages/PublicCatalog";
 import { Loader2 } from "lucide-react";
 import { useEffect } from "react";
 import { Navigate, Route, Routes } from "react-router";
@@ -56,6 +57,7 @@ export function App() {
 						<Routes>
 							<Route path="/" element={<Dashboard />} />
 							<Route path="/catalog" element={<Catalog />} />
+							<Route path="/public-catalog" element={<PublicCatalog />} />
 							<Route path="/catalog/:name" element={<SkillDetailPage />} />
 							<Route path="/commands" element={<Commands />} />
 							<Route path="/installed" element={<Installed />} />

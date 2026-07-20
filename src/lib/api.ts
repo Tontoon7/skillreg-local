@@ -6,7 +6,9 @@ import type {
 	SecureStoreMigrationSummary,
 } from "./env-inventory";
 import type {
+	AgentType,
 	AutoUpdateRunSummary,
+	CatalogPolicy,
 	CommandInstallResult,
 	CommandRemoveResult,
 	CommandUpdateResult,
@@ -14,6 +16,7 @@ import type {
 	InstallResult,
 	InstalledCommandRecord,
 	LocalSkill,
+	PaginatedCatalogSkills,
 	PaginatedSkills,
 	PollResponse,
 	ProposalDetail,
@@ -21,6 +24,7 @@ import type {
 	PushResult,
 	RegistryCommand,
 	RegistryCommandDetail,
+	ScopeType,
 	SearchResponse,
 	SkillDetail,
 	SkillregConfig,
@@ -57,6 +61,27 @@ export const getSkill = (org: string, name: string) =>
 
 export const searchSkills = (query: string, org?: string) =>
 	invoke<SearchResponse>("search_skills", { query, org });
+
+export const getCatalogPolicy = (org: string) =>
+	invoke<CatalogPolicy>("get_catalog_policy", { org });
+
+export const listCatalogSkills = (params: {
+	query?: string;
+	firstPartyOnly?: boolean;
+	page?: number;
+	limit?: number;
+}) => invoke<PaginatedCatalogSkills>("list_catalog_skills", params);
+
+export const installCatalogSkill = (params: {
+	sourceOrg: string;
+	name: string;
+	version?: string;
+	consumerOrg: string;
+	agent: AgentType;
+	scope: ScopeType;
+	projectDir?: string;
+	acceptVersionChange?: boolean;
+}) => invoke<InstallResult>("install_catalog_skill", params);
 
 export const pullSkill = (params: {
 	org: string;

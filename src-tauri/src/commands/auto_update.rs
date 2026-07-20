@@ -418,6 +418,7 @@ mod tests {
             project_dir: None,
             install_path: "/tmp/deploy-helper".to_string(),
             content_hash: "abc123".to_string(),
+            source_org: None,
             sha256: None,
             auto_update_enabled: None,
             last_checked_at: None,

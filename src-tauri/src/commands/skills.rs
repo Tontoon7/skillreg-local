@@ -368,6 +368,41 @@ pub async fn install_skill_from_registry(
         ));
     }
 
+    install_verified_tarball(
+        &org,
+        &name,
+        target_version,
+        expected,
+        &tarball_bytes,
+        &agent,
+        &scope,
+        project_dir,
+        None,
+    )
+    .await
+}
+
+/// Write a verified tarball to disk and record the installation.
+///
+/// Shared by private-registry and public-catalog installs so the safety
+/// guarantees — path checks, destructive clean, tracking — cannot drift apart
+/// between the two entry points.
+#[allow(clippy::too_many_arguments)]
+async fn install_verified_tarball(
+    org: &str,
+    name: &str,
+    target_version: String,
+    expected: String,
+    tarball_bytes: &[u8],
+    agent: &str,
+    scope: &str,
+    project_dir: Option<String>,
+    source_org: Option<String>,
+) -> Result<InstallResult, String> {
+    let name = name.to_string();
+    let org = org.to_string();
+    let agent = agent.to_string();
+    let scope = scope.to_string();
     // 4. Determine install path
     let install_dir = get_install_path(&agent, &scope, &name, project_dir.as_deref())?;
 
@@ -378,7 +413,7 @@ pub async fn install_skill_from_registry(
     fs::create_dir_all(&install_dir).map_err(|e| e.to_string())?;
 
     // 5. Extract tarball (tar.gz)
-    let decoder = flate2::read::GzDecoder::new(&tarball_bytes[..]);
+    let decoder = flate2::read::GzDecoder::new(tarball_bytes);
     let mut archive = tar::Archive::new(decoder);
     let mut file_count = 0usize;
 
@@ -453,6 +488,7 @@ pub async fn install_skill_from_registry(
         project_dir,
         install_path: install_path.clone(),
         content_hash: content_hash.clone(),
+        source_org: source_org.clone(),
         // Record the checksum that was actually verified, not the advertised one.
         sha256: Some(expected.clone()),
         auto_update_enabled: None,
@@ -470,6 +506,210 @@ pub async fn install_skill_from_registry(
         sha256: Some(expected),
         content_hash,
     })
+}
+
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogPolicy {
+    pub mode: String,
+    pub minimum_validation_level: String,
+    pub allow_first_party: bool,
+    pub can_install_from_catalog: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogValidation {
+    pub level: String,
+    pub score: u32,
+    pub passed: u32,
+    pub warned: u32,
+    pub failed: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogSkill {
+    pub name: String,
+    pub description: Option<String>,
+    pub tags: Vec<String>,
+    pub org_slug: String,
+    pub org_name: String,
+    #[serde(default)]
+    pub is_first_party: bool,
+    pub latest_version: String,
+    pub total_downloads: u64,
+    pub install_command: String,
+    pub validation: CatalogValidation,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PaginatedCatalogSkills {
+    pub skills: Vec<CatalogSkill>,
+    pub pagination: Pagination,
+}
+
+/// The consuming org's catalog policy.
+///
+/// Used only to decide whether to show the catalog at all — the server
+/// re-evaluates it on every install, so hiding the view is a courtesy, not a
+/// control.
+#[tauri::command]
+pub async fn get_catalog_policy(org: String) -> Result<CatalogPolicy, String> {
+    let (client, token) = get_auth_client()?;
+
+    let resp = client
+        .get(format!("{}/api/v1/orgs/{}/catalog-policy", API_BASE_URL, org))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format_api_error("API error", status, &body));
+    }
+
+    resp.json::<CatalogPolicy>()
+        .await
+        .map_err(|e| format!("Parse error: {}", e))
+}
+
+#[tauri::command]
+pub async fn list_catalog_skills(
+    query: Option<String>,
+    first_party_only: Option<bool>,
+    page: Option<u32>,
+    limit: Option<u32>,
+) -> Result<PaginatedCatalogSkills, String> {
+    let client = reqwest::Client::new();
+
+    let mut url = format!(
+        "{}/api/v1/public/skills?page={}&limit={}",
+        API_BASE_URL,
+        page.unwrap_or(1),
+        limit.unwrap_or(30)
+    );
+    if let Some(q) = query {
+        if !q.is_empty() {
+            url.push_str(&format!("&q={}", urlencoded(&q)));
+        }
+    }
+    if first_party_only.unwrap_or(false) {
+        url.push_str("&firstParty=true");
+    }
+
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format_api_error("API error", status, &body));
+    }
+
+    resp.json::<PaginatedCatalogSkills>()
+        .await
+        .map_err(|e| format!("Parse error: {}", e))
+}
+
+/// Install a skill published by another organization.
+///
+/// Goes through the catalog route, which evaluates the consuming org's policy
+/// and its version pin server-side. Version and checksum come from the response
+/// headers, so no separate metadata call is needed.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn install_catalog_skill(
+    source_org: String,
+    name: String,
+    version: Option<String>,
+    consumer_org: String,
+    agent: String,
+    scope: String,
+    project_dir: Option<String>,
+    accept_version_change: Option<bool>,
+) -> Result<InstallResult, String> {
+    let (client, token) = get_auth_client()?;
+
+    let requested = version.unwrap_or_else(|| "latest".to_string());
+    let url = format!(
+        "{}/api/v1/catalog/{}/{}/versions/{}/download?asOrg={}",
+        API_BASE_URL,
+        source_org,
+        name,
+        requested,
+        urlencoded(&consumer_org)
+    );
+
+    let mut request = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("x-client-type", "desktop");
+
+    if accept_version_change.unwrap_or(false) {
+        request = request.header("x-accept-version-change", "true");
+    }
+
+    let resp = request
+        .send()
+        .await
+        .map_err(|e| format!("Download error: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format_api_error("Install refused", status, &body));
+    }
+
+    let expected = resp
+        .headers()
+        .get("x-checksum-sha256")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or("The registry returned no checksum. Refusing to install unverified content.")?;
+
+    let resolved_version = resp
+        .headers()
+        .get("x-skill-version")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(requested);
+
+    let tarball_bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("Download error: {}", e))?;
+
+    let mut hasher = Sha256::new();
+    hasher.update(&tarball_bytes);
+    let actual = format!("{:x}", hasher.finalize());
+    if actual != expected {
+        return Err(format!(
+            "Checksum mismatch: expected {}, got {}",
+            expected, actual
+        ));
+    }
+
+    install_verified_tarball(
+        &source_org,
+        &name,
+        resolved_version,
+        expected,
+        &tarball_bytes,
+        &agent,
+        &scope,
+        project_dir,
+        Some(source_org.clone()),
+    )
+    .await
 }
 
 fn current_unix_timestamp_string() -> String {

@@ -42,7 +42,11 @@ export function ValidationBadge({ level, className }: Props) {
 	const Icon = config.icon;
 
 	return (
-		<Badge variant="outline" className={cn("gap-1", config.className, className)} title={config.hint}>
+		<Badge
+			variant="outline"
+			className={cn("gap-1", config.className, className)}
+			title={config.hint}
+		>
 			<Icon className="size-3" aria-hidden />
 			{config.label}
 		</Badge>

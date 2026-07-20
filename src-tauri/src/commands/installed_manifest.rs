@@ -30,6 +30,10 @@ pub struct TrackedInstallation {
     pub project_dir: Option<String>,
     pub install_path: String,
     pub content_hash: String,
+    /// Publisher org when the skill came from the public catalog rather than
+    /// the user's own registry. `None` for private installs.
+    #[serde(default)]
+    pub source_org: Option<String>,
     pub sha256: Option<String>,
     pub auto_update_enabled: Option<bool>,
     pub last_checked_at: Option<String>,
@@ -190,6 +194,7 @@ mod tests {
             project_dir: None,
             install_path: format!("/tmp/{name}"),
             content_hash: "abc123".to_string(),
+            source_org: None,
             sha256: Some("tarball-sha".to_string()),
             auto_update_enabled: None,
             last_checked_at: None,

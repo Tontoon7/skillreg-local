@@ -1,7 +1,9 @@
 import { SkillRegLogo } from "@/components/SkillRegLogo";
-import { useAuthStore } from "@/lib/store";
+import { getCatalogPolicy } from "@/lib/api";
+import { useAuthStore, useConfigStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
-import { FolderOpen, Key, LayoutDashboard, Package, Settings, Terminal } from "lucide-react";
+import { FolderOpen, Globe, Key, LayoutDashboard, Package, Settings, Terminal } from "lucide-react";
+import { useEffect, useState } from "react";
 import { NavLink } from "react-router";
 
 const NAV_ITEMS = [
@@ -15,6 +17,33 @@ const NAV_ITEMS = [
 
 export function Sidebar() {
 	const user = useAuthStore((s) => s.user);
+	const org = useConfigStore((s) => s.config?.org);
+	const [showPublicCatalog, setShowPublicCatalog] = useState(false);
+
+	// The public catalog entry only appears when the organization allows
+	// installing from it. Presentation only — the server re-evaluates the policy
+	// on every install.
+	useEffect(() => {
+		if (!org) {
+			setShowPublicCatalog(false);
+			return;
+		}
+		let active = true;
+		getCatalogPolicy(org)
+			.then((policy) => active && setShowPublicCatalog(policy.canInstallFromCatalog))
+			.catch(() => active && setShowPublicCatalog(false));
+		return () => {
+			active = false;
+		};
+	}, [org]);
+
+	const navItems = showPublicCatalog
+		? [
+				...NAV_ITEMS.slice(0, 2),
+				{ to: "/public-catalog", label: "Public catalog", icon: Globe },
+				...NAV_ITEMS.slice(2),
+			]
+		: NAV_ITEMS;
 
 	return (
 		<aside className="flex h-full w-56 flex-col brushed-metal channel-border-r text-sidebar-foreground">
@@ -29,7 +58,7 @@ export function Sidebar() {
 				<p className="text-[10px] uppercase tracking-widest font-semibold text-muted-foreground [font-family:'Chakra_Petch',sans-serif] px-3 py-2">
 					Navigation
 				</p>
-				{NAV_ITEMS.map((item) => (
+				{navItems.map((item) => (
 					<NavLink
 						key={item.to}
 						to={item.to}

@@ -70,6 +70,39 @@ export interface ValidationResult {
 	engineVersion: string;
 }
 
+export interface CatalogPolicy {
+	mode: "blocked" | "allowlist" | "validated_only" | "open";
+	minimumValidationLevel: ValidationLevel;
+	allowFirstParty: boolean;
+	canInstallFromCatalog: boolean;
+}
+
+export interface CatalogValidation {
+	level: ValidationLevel;
+	score: number;
+	passed: number;
+	warned: number;
+	failed: number;
+}
+
+export interface CatalogSkill {
+	name: string;
+	description: string | null;
+	tags: string[];
+	orgSlug: string;
+	orgName: string;
+	isFirstParty: boolean;
+	latestVersion: string;
+	totalDownloads: number;
+	installCommand: string;
+	validation: CatalogValidation;
+}
+
+export interface PaginatedCatalogSkills {
+	skills: CatalogSkill[];
+	pagination: { page: number; limit: number; total: number; totalPages: number };
+}
+
 export interface SkillDetail extends RegistrySkill {
 	isDeprecated: boolean;
 	deprecatedMessage: string | null;
@@ -229,6 +262,8 @@ export interface TrackedInstallation {
 	projectDir: string | null;
 	installPath: string;
 	contentHash: string;
+	/** Publisher org when installed from the public catalog. */
+	sourceOrg?: string | null;
 	sha256: string | null;
 	autoUpdateEnabled: boolean | null;
 	lastCheckedAt: string | null;
