@@ -62,7 +62,7 @@ jobs:
           workspaces: src-tauri
 
       - name: Install frontend dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Setup Apple code signing
         if: startsWith(matrix.platform, 'macos')

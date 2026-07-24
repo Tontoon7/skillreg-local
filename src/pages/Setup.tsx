@@ -1,14 +1,17 @@
 import { Titlebar } from "@/components/layout/Titlebar";
 import { Button } from "@/components/ui/button";
+import { openUrl } from "@/lib/api";
+import { canCompleteDesktopSetup, resolveDesktopSetupState } from "@/lib/setup-state";
 import { useAuthStore, useConfigStore } from "@/lib/store";
 import type { AgentType, ScopeType } from "@/lib/types";
-import { ArrowLeft, ArrowRight, Check, Loader2 } from "lucide-react";
-import { useState } from "react";
+import { ArrowLeft, ArrowRight, Check, ExternalLink, Loader2, RefreshCw } from "lucide-react";
+import { useEffect, useState } from "react";
 
 type Step = 1 | 2 | 3;
 
 export function Setup() {
 	const user = useAuthStore((s) => s.user);
+	const refreshOrganizations = useAuthStore((s) => s.checkAuth);
 	const config = useConfigStore((s) => s.config);
 	const update = useConfigStore((s) => s.update);
 
@@ -17,10 +20,61 @@ export function Setup() {
 	const [agent, setAgent] = useState<AgentType>(config.defaultAgent || "claude");
 	const [scope, setScope] = useState<ScopeType>(config.defaultScope || "project");
 	const [saving, setSaving] = useState(false);
+	const [refreshing, setRefreshing] = useState(false);
+	const [workspaceError, setWorkspaceError] = useState<string | null>(null);
 
 	const orgs = user?.orgs || [];
+	const setupState = resolveDesktopSetupState(orgs, org);
+
+	useEffect(() => {
+		if (orgs.length === 1 && org !== orgs[0].slug) {
+			setOrg(orgs[0].slug);
+		} else if (org && !orgs.some((organization) => organization.slug === org)) {
+			setOrg("");
+		}
+	}, [org, orgs]);
+
+	const createWorkspace = async () => {
+		setWorkspaceError(null);
+		try {
+			await openUrl("https://app.skillreg.dev/onboarding?source=desktop");
+		} catch {
+			setWorkspaceError("Could not open the browser. Visit app.skillreg.dev/onboarding.");
+		}
+	};
+
+	const refresh = async () => {
+		setRefreshing(true);
+		setWorkspaceError(null);
+		try {
+			const refreshedUser = await refreshOrganizations();
+			if (!refreshedUser) {
+				setWorkspaceError(
+					"Could not refresh your account. Check your connection and sign in again.",
+				);
+				return;
+			}
+			const nextOrganizations = refreshedUser.orgs;
+			if (nextOrganizations.length === 0) {
+				setWorkspaceError(
+					"No workspace found yet. Finish creating it in the browser, then refresh.",
+				);
+				return;
+			}
+			if (!nextOrganizations.some((organization) => organization.slug === org)) {
+				setOrg(nextOrganizations[0].slug);
+			}
+		} finally {
+			setRefreshing(false);
+		}
+	};
 
 	const finish = async () => {
+		if (!canCompleteDesktopSetup(orgs, org)) {
+			setWorkspaceError("Select a valid workspace before finishing setup.");
+			setStep(1);
+			return;
+		}
 		setSaving(true);
 		try {
 			await update({ org, defaultAgent: agent, defaultScope: scope, setupDone: true });
@@ -76,14 +130,45 @@ export function Setup() {
 										{org === o.slug && <Check className="size-4 text-primary" />}
 									</button>
 								))}
-								{orgs.length === 0 && (
-									<p className="text-sm text-muted-foreground text-center py-4">
-										No organizations found
-									</p>
+								{setupState === "workspace-required" && (
+									<div className="space-y-3 rounded-lg border border-dashed p-4 text-center">
+										<div>
+											<p className="text-sm font-medium">Create your first workspace</p>
+											<p className="mt-1 text-xs text-muted-foreground">
+												A workspace is required to publish, invite teammates, and install private
+												skills.
+											</p>
+										</div>
+										<div className="grid gap-2">
+											<Button type="button" onClick={createWorkspace}>
+												<ExternalLink className="size-4" />
+												Create workspace in browser
+											</Button>
+											<Button
+												type="button"
+												variant="outline"
+												onClick={refresh}
+												disabled={refreshing}
+											>
+												<RefreshCw className={`size-4 ${refreshing ? "animate-spin" : ""}`} />
+												{refreshing ? "Refreshing..." : "Refresh organizations"}
+											</Button>
+										</div>
+									</div>
 								)}
 							</div>
 
-							<Button className="w-full" onClick={() => setStep(2)} disabled={!org}>
+							{workspaceError && (
+								<p className="rounded-md bg-destructive/10 p-3 text-xs text-destructive">
+									{workspaceError}
+								</p>
+							)}
+
+							<Button
+								className="w-full"
+								onClick={() => setStep(2)}
+								disabled={setupState !== "ready"}
+							>
 								Next
 								<ArrowRight className="size-4" />
 							</Button>
@@ -177,7 +262,11 @@ export function Setup() {
 									<ArrowLeft className="size-4" />
 									Back
 								</Button>
-								<Button className="flex-1" onClick={finish} disabled={saving}>
+								<Button
+									className="flex-1"
+									onClick={finish}
+									disabled={saving || !canCompleteDesktopSetup(orgs, org)}
+								>
 									{saving ? (
 										<Loader2 className="size-4 animate-spin" />
 									) : (

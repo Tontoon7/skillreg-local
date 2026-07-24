@@ -160,7 +160,7 @@ async fn run_auto_update_once_inner() -> Result<AutoUpdateRunSummary, String> {
         HashMap::new();
 
     for org in orgs {
-        let result = fetch_latest_versions_for_org(&client, &token, &org).await;
+        let result = fetch_latest_versions_for_org(&client, token, &org).await;
         registry_versions_by_org.insert(org, result);
     }
 
