@@ -8,7 +8,7 @@ Application de bureau SkillReg (Tauri 2, Rust et React) qui permet d'installer, 
 - **Ce dépôt** est l'application de bureau : interface locale pour les utilisateurs qui n'utilisent pas la CLI et pour tout ce qui touche au système de fichiers (installations, mises à jour, variables d'environnement, slash commands). C'est la **priorité produit n° 1** de SkillReg, devant `Tontoon7/skillreg-app` (web, API, CLI) et `Tontoon7/skillreg-website` (site public).
 - Elle consomme la même API REST que la CLI (`https://app.skillreg.dev/api/v1`, contrat dans `skillreg-app/API-REFERENCE.md`) et partage ses fichiers de configuration locaux.
 - **Distribution** : releases GitHub de `Tontoon7/skillreg-local` pour macOS (arm64 et x64, signées et notarisées), Linux (`.deb`, `.rpm`, AppImage) et Windows ; mise à jour automatique par le plugin updater de Tauri ; page de téléchargement sur https://skillreg.dev/download.
-- **Docs de référence** : `DEV-PLAN.md` (architecture, commandes Rust, écrans, API), `ROADMAP.md` (avancement par phase), `docs/plans/2026-03-10-macos-notarization.md`, `docs/plans/2026-05-20-skillreg-env-engine-spec.md` (moteur de variables d'environnement par organisation).
+- **Docs de référence** : `DEV-PLAN.md` (architecture, commandes Rust, écrans, API), `ROADMAP.md` (avancement par phase), `docs/plans/2026-03-10-macos-notarization.md`, `docs/plans/2026-05-20-skillreg-env-engine-spec.md` (moteur de variables d'environnement par organisation), `docs/plans/2026-07-30-windows-linux-release-signing-plan.md` (signature, configuration et recette des releases).
 - **État** : phases 1 à 6 terminées (squelette, auth et dashboard, catalogue et installation, skills locales et publication, variables d'environnement et réglages, packaging signé et notarisé), puis moteur de variables par organisation, slash commands, mises à jour automatiques des skills, badges de validation et catalogue public. Les secrets de signature et de notarisation Apple sont configurés dans GitHub. Le reste à faire est dans `ROADMAP.md`.
 
 ## Carte du code
@@ -39,6 +39,9 @@ Stack : Tauri v2, Rust (reqwest, serde, sha2, tar, flate2, dirs, open, keyring-c
 | `src/styles/globals.css` | Base Tailwind, variables des thèmes sombre et clair, prose |
 | `tests/*.test.ts` | Tests `node:test` de la logique de `src/lib` |
 | `scripts/check-release-notarization.sh` | Garde-fou : vérifie que `release.yml` notarise toujours les DMG |
+| `scripts/windows-signing.ps1`, `scripts/linux-signing.sh` | Signature et vérification natives Authenticode / OpenPGP, avec identités attendues |
+| `scripts/release-artifacts.py` | Collecte stricte, inventaires SHA-256, validation des transferts et préparation de `latest.json` et de la liste de publication |
+| `tests/test_release_artifacts.py`, `scripts/test-*-signing.*` | Tests de la chaîne de release : contrats Python, GPG éphémère, PowerShell et SignTool natif |
 
 ## Commandes
 
@@ -56,11 +59,17 @@ cargo test --manifest-path src-tauri/Cargo.toml <nom>        # tests Rust dont l
 node --test --experimental-strip-types tests/*.test.ts       # tests TypeScript (pas de script sur main)
 node --test --experimental-strip-types tests/env-inventory.test.ts   # un fichier
 bash scripts/check-release-notarization.sh                   # après une modification de release.yml (requiert rg)
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -p 'test_release_artifacts.py' -v
+bash scripts/test-linux-signing.sh                          # requiert GnuPG ; trousseaux de test isolés
+pwsh -NoProfile -File scripts/test-windows-signing.ps1        # Windows + WINDOWS_SIGNTOOL_PATH vers SignTool
+actionlint .github/workflows/release.yml                     # validation du workflow, outil ponctuel
 ```
 
 **Validation de l'usine** (commande `check` de la configuration active) : `pnpm format:check && pnpm build`.
 
 Elle ne couvre ni le Rust ni les tests TypeScript. Si tu modifies `src-tauri/`, lance aussi `cargo test --manifest-path src-tauri/Cargo.toml` après `pnpm build` (qui produit `dist/`, référencé par `tauri.conf.json`) ; si tu modifies `src/lib/` ou `tests/`, lance les tests `node --test` ci-dessus. Signale dans ta conclusion ce que tu as lancé.
+
+Pour la chaîne de release, lancer aussi les tests Python, le garde macOS et actionlint, ainsi que GPG et PowerShell sur leurs environnements compatibles. Le workflow impose Python sur toute la matrice et les tests natifs sur Linux/Windows avant les secrets de signature. Un outil local absent doit être signalé, jamais remplacé par un test passé en skip.
 
 Dans l'usine, ne lance jamais `pnpm tauri dev`, `pnpm dev` ou `pnpm tauri build` : les deux premiers ne s'arrêtent pas, le troisième est un packaging lourd qui n'est pas demandé.
 
@@ -85,6 +94,8 @@ Dans l'usine, ne lance jamais `pnpm tauri dev`, `pnpm dev` ou `pnpm tauri build`
 
 - Branche cible : `main`. Aucune CI ne tourne sur les PR ni sur `main`.
 - Release (`.github/workflows/release.yml`) : sur un tag `v*`, build Tauri pour macOS arm64 et x64 (signature Developer ID, notarisation et agrafage des DMG), Linux et Windows, puis création d'une release GitHub **en brouillon** avec les installeurs et `latest.json` pour l'updater. Axel publie ensuite le brouillon. Un build complet peut durer plus de deux heures.
+- Windows exige Azure Artifact Signing via OIDC et le hook Tauri avant packaging ; Linux exige des signatures OpenPGP détachées sur les quatre téléchargements. Les variables `AZURE_*`, `WINDOWS_SIGNING_SUBJECT`, `LINUX_SIGNING_PUBLIC_KEY`, `LINUX_SIGNING_KEY_FINGERPRINT` et les secrets `LINUX_SIGNING_PRIVATE_KEY` / `LINUX_SIGNING_PASSPHRASE` sont décrits dans le plan de signature. Leur configuration externe et la recette Azure ne sont pas démontrées par les tests isolés.
+- Avant toute écriture de release, les quatre inventaires vérifiés doivent correspondre au commit, au tag, aux identités attendues et aux SHA-256 transférés. La publication revérifie OpenPGP et utilise uniquement la liste préparée, avec les quatre plateformes updater obligatoires. Aucun repli non signé. Seul `publish` dispose de `contents: write`.
 - Une release commence par un commit `chore: release x.y.z` qui change la version dans `package.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock` et `src-tauri/tauri.conf.json`, puis le tag `vx.y.z`. Ni tag ni bump de version sans demande d'Axel.
 - Politique de l'usine pour ce dépôt : livraison `review`. L'usine ouvre une PR et la laisse en « À valider » ; Axel fusionne et publie une release manuellement.
 
@@ -116,5 +127,8 @@ Les tickets de ce dépôt sont exécutés par l'usine de développement d'Axel (
 - Updater : `plugins.updater.pubkey` doit correspondre au secret `TAURI_SIGNING_PRIVATE_KEY`, et `bundle.createUpdaterArtifacts: "v1Compatible"` produit les `.app.tar.gz` et `.sig` que `release.yml` collecte. Changer l'un ou l'autre casse les mises à jour des installations existantes.
 - `.gitignore` exclut `*.png`, `*.jpg` et `*.jpeg` hors `src-tauri/icons/*.png` : une image ajoutée ailleurs n'est pas commitée, sans avertissement.
 - `src-tauri/gen/schemas/desktop-schema 2.json` et `desktop-schema 3.json` sont des doublons iCloud commités par erreur : ne les modifie pas et ne crée aucun fichier suffixé ` 2`.
-- `scripts/check-release-notarization.sh` utilise `rg`, absent du PATH de l'usine sur le Mac mini : il y échoue même quand `release.yml` est correct.
+- `scripts/check-release-notarization.sh` exige `rg` dans le PATH ; le binaire livré avec Codex peut le fournir, mais ce n'est pas garanti pour les autres agents de l'usine.
 - La branche `feat/activation-reset` (non fusionnée, suivie par `skillreg-app` issue #2) modifie l'activation, le setup, la release, les dépendances Tauri et ajoute un script `pnpm test` : vérifie-la avant de toucher ces zones.
+- Signer Windows après `tauri build` ne signe pas le contenu déjà archivé de l'updater ; modifier ensuite une archive invalide sa `.sig`. Le hook de `release.yml` doit rester actif pendant le build ; les `.asc` Linux sont distinctes des `.sig` Tauri.
+- `bundle.windows.signCommand` sous forme de chaîne découpe sur les espaces : utiliser l'objet `cmd` / `args` pour les chemins absolus du wrapper PowerShell. Les builds locaux n'appliquent pas l'overlay CI temporaire.
+- GnuPG peut émettre `KEYEXPIRED` pour une ancienne sous-clé inutilisée : `linux-signing.sh` contrôle l'expiration primaire et `EXPKEYSIG` pour le signataire, afin de permettre une rotation vers une sous-clé valide.
