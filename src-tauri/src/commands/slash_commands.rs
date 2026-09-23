@@ -188,10 +188,10 @@ fn command_record_matches(
     agent: Option<&str>,
     scope: Option<&str>,
 ) -> bool {
-    org.map_or(true, |value| record.org == value)
-        && name.map_or(true, |value| record.name == normalize_command_name(value))
-        && agent.map_or(true, |value| record.agent == value)
-        && scope.map_or(true, |value| record.scope == value)
+    org.is_none_or(|value| record.org == value)
+        && name.is_none_or(|value| record.name == normalize_command_name(value))
+        && agent.is_none_or(|value| record.agent == value)
+        && scope.is_none_or(|value| record.scope == value)
 }
 
 fn upsert_command_manifest_records(

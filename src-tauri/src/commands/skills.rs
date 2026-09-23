@@ -331,6 +331,7 @@ pub async fn install_skill_from_registry(
     let dl_resp = client
         .get(&download_url)
         .header("Authorization", format!("Bearer {}", token))
+        .header("x-client-type", "desktop")
         .send()
         .await
         .map_err(|e| format!("Download error: {}", e))?;
@@ -508,7 +509,6 @@ async fn install_verified_tarball(
     })
 }
 
-
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogPolicy {
@@ -560,7 +560,10 @@ pub async fn get_catalog_policy(org: String) -> Result<CatalogPolicy, String> {
     let (client, token) = get_auth_client()?;
 
     let resp = client
-        .get(format!("{}/api/v1/orgs/{}/catalog-policy", API_BASE_URL, org))
+        .get(format!(
+            "{}/api/v1/orgs/{}/catalog-policy",
+            API_BASE_URL, org
+        ))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -1028,6 +1031,13 @@ fn create_tarball(dir: &Path, skill_version: &str) -> Result<Vec<u8>, String> {
     enc.finish().map_err(|e| e.to_string())
 }
 
+fn urlencoded(s: &str) -> String {
+    s.replace(' ', "%20")
+        .replace('&', "%26")
+        .replace('=', "%3D")
+        .replace('+', "%2B")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ensure_skill_md_version, is_safe_entry_path};
@@ -1078,11 +1088,4 @@ mod tests {
         assert!(updated.contains("  version: \"1.4.0\""));
         assert!(!updated.contains("1.3.0"));
     }
-}
-
-fn urlencoded(s: &str) -> String {
-    s.replace(' ', "%20")
-        .replace('&', "%26")
-        .replace('=', "%3D")
-        .replace('+', "%2B")
 }

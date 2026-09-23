@@ -12,6 +12,23 @@ export default defineConfig({
 			"@": resolve(__dirname, "src"),
 		},
 	},
+	build: {
+		rollupOptions: {
+			output: {
+				manualChunks: {
+					"react-vendor": ["react", "react-dom", "react-router"],
+					"markdown-vendor": ["react-markdown", "rehype-sanitize"],
+					"tauri-vendor": [
+						"@tauri-apps/api",
+						"@tauri-apps/plugin-dialog",
+						"@tauri-apps/plugin-notification",
+						"@tauri-apps/plugin-process",
+						"@tauri-apps/plugin-updater",
+					],
+				},
+			},
+		},
+	},
 	clearScreen: false,
 	server: {
 		port: 1420,

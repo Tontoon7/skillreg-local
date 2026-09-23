@@ -32,6 +32,8 @@ export interface DeviceFlowResponse {
 	deviceCode: string;
 	userCode: string;
 	verificationUrl: string;
+	expiresIn?: number;
+	interval?: number;
 }
 
 export interface PollResponse {

@@ -177,7 +177,7 @@ impl NativeCredentialBackend {
             keyring_core::set_default_store(
                 Store::new_with_configuration(&config).map_err(|e| e.to_string())?,
             );
-            return Ok(());
+            Ok(())
         }
 
         #[cfg(target_os = "windows")]
@@ -186,7 +186,7 @@ impl NativeCredentialBackend {
             keyring_core::set_default_store(
                 Store::new_with_configuration(&config).map_err(|e| e.to_string())?,
             );
-            return Ok(());
+            Ok(())
         }
 
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -195,7 +195,7 @@ impl NativeCredentialBackend {
             keyring_core::set_default_store(
                 Store::new_with_configuration(&config).map_err(|e| e.to_string())?,
             );
-            return Ok(());
+            Ok(())
         }
 
         #[cfg(not(any(
