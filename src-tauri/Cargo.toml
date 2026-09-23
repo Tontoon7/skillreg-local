@@ -22,6 +22,7 @@ keyring-core = "1.0.0"
 open = "5"
 reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
 tokio = { version = "1", features = ["full"] }
+uuid = { version = "1", features = ["serde", "v4"] }
 tar = "0.4"
 flate2 = "1.0"
 tauri-plugin-dialog = "2"
@@ -37,6 +38,8 @@ tauri-build = { version = "2", features = [] }
 apple-native-keyring-store = { version = "1.0.0", features = ["keychain"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+junction = "2"
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 windows-native-keyring-store = "1.0.0"
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
