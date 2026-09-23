@@ -1,40 +1,56 @@
+use crate::managed_skills::{
+    agents::{AgentError, AgentRegistry, DefaultAgentRegistry, DetectionResult},
+    AgentId,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentPaths {
     pub project: String,
     pub user: String,
+    pub user_candidates: Vec<String>,
 }
 
 pub fn get_agent_paths() -> HashMap<String, AgentPaths> {
-    let home = dirs::home_dir().unwrap_or_default();
+    dirs::home_dir()
+        .and_then(|home| get_agent_paths_for_home(&home).ok())
+        .unwrap_or_default()
+}
+
+pub fn get_agent_paths_for_home(home: &Path) -> Result<HashMap<String, AgentPaths>, AgentError> {
+    let registry = DefaultAgentRegistry::default();
     let mut map = HashMap::new();
-    map.insert(
-        "claude".into(),
-        AgentPaths {
-            project: ".claude/skills".into(),
-            user: home.join(".claude/skills").to_string_lossy().into_owned(),
-        },
-    );
-    map.insert(
-        "codex".into(),
-        AgentPaths {
-            project: ".codex/skills".into(),
-            user: home.join(".codex/skills").to_string_lossy().into_owned(),
-        },
-    );
-    map.insert(
-        "cursor".into(),
-        AgentPaths {
-            project: ".cursor/skills".into(),
-            user: home.join(".cursor/skills").to_string_lossy().into_owned(),
-        },
-    );
-    map
+    for adapter in registry.adapters() {
+        let (id, project) = match adapter.id() {
+            AgentId::Claude => ("claude", ".claude/skills"),
+            AgentId::Codex => ("codex", ".codex/skills"),
+            AgentId::Cursor => ("cursor", ".cursor/skills"),
+        };
+        let preferred = adapter.preferred_user_skill_dir(home)?;
+        map.insert(
+            id.to_string(),
+            AgentPaths {
+                project: project.to_string(),
+                user: preferred.to_string_lossy().into_owned(),
+                user_candidates: adapter
+                    .candidate_user_skill_dirs(home)
+                    .into_iter()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .collect(),
+            },
+        );
+    }
+    Ok(map)
+}
+
+#[tauri::command]
+pub fn detect_agents() -> Result<Vec<DetectionResult>, String> {
+    let home = dirs::home_dir().ok_or_else(|| "AGENT_HOME_UNAVAILABLE".to_string())?;
+    Ok(DefaultAgentRegistry::default().detect_all(&home))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,10 +100,14 @@ fn parse_frontmatter(content: &str) -> HashMap<String, String> {
         None => return result,
     };
 
+    let lines = fm_content.lines().collect::<Vec<_>>();
     let mut current_parent = String::new();
-    for line in fm_content.lines() {
+    let mut index = 0;
+    while index < lines.len() {
+        let line = lines[index];
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
+            index += 1;
             continue;
         }
 
@@ -96,10 +116,41 @@ fn parse_frontmatter(content: &str) -> HashMap<String, String> {
             let raw_val = trimmed[sep + 1..].trim();
             let indent = line.len() - line.trim_start().len();
 
-            if raw_val.is_empty() || raw_val == "|" || raw_val == ">" {
+            if matches!(raw_val.as_bytes().first(), Some(b'|' | b'>')) {
+                let folded = raw_val.starts_with('>');
+                let full_key = if indent > 0 && !current_parent.is_empty() {
+                    format!("{}{}", current_parent, key)
+                } else {
+                    current_parent.clear();
+                    key.to_string()
+                };
+                let mut block_lines = Vec::new();
+                index += 1;
+                while index < lines.len() {
+                    let block_line = lines[index];
+                    let block_indent = block_line.len() - block_line.trim_start().len();
+                    if !block_line.trim().is_empty() && block_indent <= indent {
+                        break;
+                    }
+                    block_lines.push(block_line.trim().to_string());
+                    index += 1;
+                }
+                let value = if folded {
+                    fold_yaml_block_scalar(&block_lines)
+                } else {
+                    block_lines.join("\n").trim_end().to_string()
+                };
+                if !value.is_empty() {
+                    result.insert(full_key, value);
+                }
+                continue;
+            }
+
+            if raw_val.is_empty() {
                 if indent == 0 {
                     current_parent = format!("{}.", key);
                 }
+                index += 1;
                 continue;
             }
 
@@ -112,9 +163,27 @@ fn parse_frontmatter(content: &str) -> HashMap<String, String> {
                 result.insert(key.to_string(), val.to_string());
             }
         }
+        index += 1;
     }
 
     result
+}
+
+fn fold_yaml_block_scalar(lines: &[String]) -> String {
+    let mut value = String::new();
+    for line in lines {
+        if line.is_empty() {
+            if !value.ends_with('\n') {
+                value.push('\n');
+            }
+        } else {
+            if !value.is_empty() && !value.ends_with('\n') {
+                value.push(' ');
+            }
+            value.push_str(line);
+        }
+    }
+    value.trim_end().to_string()
 }
 
 fn parse_tags(content: &str) -> Vec<String> {
@@ -322,79 +391,136 @@ pub fn scan_local_skills(
             .ok_or(format!("Unknown agent: {}", ag))?;
 
         for sc in &scopes {
-            let dir = match sc.as_str() {
-                "project" => &paths.project,
-                "user" => &paths.user,
+            let directories: Vec<&str> = match sc.as_str() {
+                "project" => vec![paths.project.as_str()],
+                "user" => paths.user_candidates.iter().map(String::as_str).collect(),
                 _ => continue,
             };
 
-            let dir_path = Path::new(dir);
-            if !dir_path.exists() {
-                continue;
-            }
-
-            let entries = fs::read_dir(dir_path).map_err(|e| e.to_string())?;
-            for entry in entries.flatten() {
-                let fname = entry.file_name().to_string_lossy().into_owned();
-                if fname.starts_with('.') {
+            let mut scanned_paths = HashSet::<PathBuf>::new();
+            for dir in directories {
+                let dir_path = Path::new(dir);
+                if !dir_path.exists() {
                     continue;
                 }
 
-                let full_path = entry.path();
-                if !full_path.is_dir() {
-                    continue;
-                }
+                let entries = fs::read_dir(dir_path).map_err(|e| e.to_string())?;
+                for entry in entries.flatten() {
+                    let fname = entry.file_name().to_string_lossy().into_owned();
+                    if fname.starts_with('.') {
+                        continue;
+                    }
 
-                let skill_md = full_path.join("SKILL.md");
-                let md_path = if skill_md.exists() {
-                    Some(skill_md)
-                } else {
-                    // Fallback: find any .md file
-                    fs::read_dir(&full_path).ok().and_then(|entries| {
-                        entries.flatten().find_map(|e| {
-                            let name = e.file_name().to_string_lossy().into_owned();
-                            if name.ends_with(".md") {
-                                Some(e.path())
-                            } else {
-                                None
-                            }
+                    let full_path = entry.path();
+                    if !full_path.is_dir() || !scanned_paths.insert(full_path.clone()) {
+                        continue;
+                    }
+
+                    let skill_md = full_path.join("SKILL.md");
+                    let md_path = if skill_md.exists() {
+                        Some(skill_md)
+                    } else {
+                        // Fallback: find any .md file
+                        fs::read_dir(&full_path).ok().and_then(|entries| {
+                            entries.flatten().find_map(|e| {
+                                let name = e.file_name().to_string_lossy().into_owned();
+                                if name.ends_with(".md") {
+                                    Some(e.path())
+                                } else {
+                                    None
+                                }
+                            })
                         })
-                    })
-                };
+                    };
 
-                if let Some(md) = md_path {
-                    let content = fs::read_to_string(&md).unwrap_or_default();
-                    let hash = compute_content_hash(&content);
-                    let fm = parse_frontmatter(&content);
-                    let tags = parse_tags(&content);
-                    let env_vars = parse_env_from_frontmatter(&content);
+                    if let Some(md) = md_path {
+                        let content = fs::read_to_string(&md).unwrap_or_default();
+                        let hash = compute_content_hash(&content);
+                        let fm = parse_frontmatter(&content);
+                        let tags = parse_tags(&content);
+                        let env_vars = parse_env_from_frontmatter(&content);
 
-                    let modified_at = fs::metadata(&md)
-                        .and_then(|m| m.modified())
-                        .ok()
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| d.as_secs().to_string());
+                        let modified_at = fs::metadata(&md)
+                            .and_then(|m| m.modified())
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_secs().to_string());
 
-                    results.push(LocalSkill {
-                        name: fm.get("name").cloned().unwrap_or_else(|| fname.clone()),
-                        version: fm
-                            .get("version")
-                            .or_else(|| fm.get("metadata.version"))
-                            .cloned()
-                            .unwrap_or_else(|| "-".into()),
-                        description: fm.get("description").cloned().unwrap_or_default(),
-                        tags,
-                        path: full_path.to_string_lossy().into_owned(),
-                        agent: ag.clone(),
-                        scope: sc.clone(),
-                        content_hash: hash,
-                        modified_at,
-                        env_vars,
-                    });
+                        results.push(LocalSkill {
+                            name: fm.get("name").cloned().unwrap_or_else(|| fname.clone()),
+                            version: fm
+                                .get("version")
+                                .or_else(|| fm.get("metadata.version"))
+                                .cloned()
+                                .unwrap_or_else(|| "-".into()),
+                            description: fm.get("description").cloned().unwrap_or_default(),
+                            tags,
+                            path: full_path.to_string_lossy().into_owned(),
+                            agent: ag.clone(),
+                            scope: sc.clone(),
+                            content_hash: hash,
+                            modified_at,
+                            env_vars,
+                        });
+                    }
                 }
             }
         }
     }
 
     Ok(results)
+}
+
+#[cfg(test)]
+mod agent_path_tests {
+    use super::*;
+    use uuid::Uuid;
+
+    #[test]
+    fn frontmatter_parser_supports_folded_and_literal_block_scalars() {
+        let folded = parse_frontmatter(
+            "---\nname: folded-skill\ndescription: >\n  A first line\n  followed by a second line.\n---\n",
+        );
+        let literal = parse_frontmatter(
+            "---\nname: literal-skill\ndescription: |\n  A first line\n  followed by a second line.\n---\n",
+        );
+
+        assert_eq!(
+            folded.get("description").map(String::as_str),
+            Some("A first line followed by a second line.")
+        );
+        assert_eq!(
+            literal.get("description").map(String::as_str),
+            Some("A first line\nfollowed by a second line.")
+        );
+    }
+
+    #[test]
+    fn user_paths_delegate_to_the_validated_adapter_registry() {
+        let home =
+            std::env::temp_dir().join(format!("skillreg-local-agent-paths-{}", Uuid::new_v4()));
+
+        let paths = get_agent_paths_for_home(&home).unwrap();
+
+        assert_eq!(
+            paths.get("claude").unwrap().user,
+            home.join(".claude/skills").to_string_lossy()
+        );
+        assert_eq!(
+            paths.get("codex").unwrap().user,
+            home.join(".agents/skills").to_string_lossy()
+        );
+        assert_eq!(
+            paths.get("codex").unwrap().user_candidates,
+            vec![
+                home.join(".agents/skills").to_string_lossy().into_owned(),
+                home.join(".codex/skills").to_string_lossy().into_owned(),
+            ]
+        );
+        assert_eq!(
+            paths.get("cursor").unwrap().user,
+            home.join(".cursor/skills").to_string_lossy()
+        );
+        assert!(!PathBuf::from(&paths.get("codex").unwrap().user).exists());
+    }
 }
