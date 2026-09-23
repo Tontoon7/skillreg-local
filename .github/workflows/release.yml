@@ -6,10 +6,16 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      WINDOWS_SIGNING_SUBJECT: ${{ vars.WINDOWS_SIGNING_SUBJECT }}
+      LINUX_SIGNING_KEY_FINGERPRINT: ${{ vars.LINUX_SIGNING_KEY_FINGERPRINT }}
     strategy:
       fail-fast: false
       matrix:
@@ -35,12 +41,125 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+
+      - name: Test release artifact contract
+        shell: bash
+        run: python -m unittest discover -s tests -p 'test_release_artifacts.py' -v
 
       - name: Install dependencies (Linux)
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf gnupg
+
+      - name: Test Linux signing
+        if: runner.os == 'Linux'
+        run: bash scripts/test-linux-signing.sh
+
+      - name: Setup .NET for Artifact Signing
+        if: runner.os == 'Windows'
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install pinned Windows signing tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'windows-signing'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $packages = @{
+            'microsoft.windows.sdk.buildtools' = '10.0.26100.9169'
+            'microsoft.artifactsigning.client' = '1.0.128'
+          }
+          foreach ($id in $packages.Keys) {
+            $version = $packages[$id]
+            $zip = Join-Path $root "$id.zip"
+            Invoke-WebRequest "https://api.nuget.org/v3-flatcontainer/$id/$version/$id.$version.nupkg" -OutFile $zip
+            Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $root $id)
+          }
+          $tools = @(Get-ChildItem "$root/microsoft.windows.sdk.buildtools/bin" -Recurse -Filter signtool.exe |
+            Where-Object { $_.Directory.Name -eq 'x64' })
+          if ($tools.Count -ne 1) { throw 'Expected exactly one x64 SignTool' }
+          $dlib = Join-Path $root 'microsoft.artifactsigning.client/bin/x64/Azure.CodeSigning.Dlib.dll'
+          if (-not (Test-Path -LiteralPath $dlib -PathType Leaf)) { throw 'Missing Artifact Signing dlib' }
+          "WINDOWS_SIGNTOOL_PATH=$($tools[0].FullName)" >> $env:GITHUB_ENV
+          "WINDOWS_SIGNING_DLIB=$dlib" >> $env:GITHUB_ENV
+
+      - name: Test Windows signing
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test-windows-signing.ps1
+
+      - name: Validate signing prerequisites
+        shell: bash
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_CERTIFICATE_PROFILE: ${{ vars.AZURE_SIGNING_CERTIFICATE_PROFILE }}
+          LINUX_SIGNING_PUBLIC_KEY: ${{ vars.LINUX_SIGNING_PUBLIC_KEY }}
+        run: |
+          python - <<'PY'
+          import json, os, pathlib, tomllib
+          version = os.environ['GITHUB_REF_NAME'].removeprefix('v')
+          versions = [json.loads(pathlib.Path(p).read_text())['version']
+                      for p in ('package.json', 'src-tauri/tauri.conf.json')]
+          versions.append(tomllib.loads(pathlib.Path('src-tauri/Cargo.toml').read_text())['package']['version'])
+          if any(v != version for v in versions):
+              raise SystemExit('Release tag must match all application versions')
+          required = []
+          if os.environ['RUNNER_OS'] == 'Windows':
+              required = ['AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_SUBSCRIPTION_ID',
+                          'AZURE_SIGNING_ENDPOINT', 'AZURE_SIGNING_ACCOUNT',
+                          'AZURE_SIGNING_CERTIFICATE_PROFILE', 'WINDOWS_SIGNING_SUBJECT']
+          if os.environ['RUNNER_OS'] == 'Linux':
+              required = ['LINUX_SIGNING_PUBLIC_KEY', 'LINUX_SIGNING_KEY_FINGERPRINT']
+          for name in required:
+              if not os.environ.get(name, '').strip():
+                  raise SystemExit(f'Missing signing prerequisite: {name}')
+          PY
+
+      - name: Configure Windows signing hook
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_CERTIFICATE_PROFILE: ${{ vars.AZURE_SIGNING_CERTIFICATE_PROFILE }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'windows-signing'
+          $metadata = Join-Path $root 'metadata.json'
+          @{
+            Endpoint = $env:AZURE_SIGNING_ENDPOINT
+            CodeSigningAccountName = $env:AZURE_SIGNING_ACCOUNT
+            CertificateProfileName = $env:AZURE_SIGNING_CERTIFICATE_PROFILE
+            ExcludeCredentials = @(
+              'EnvironmentCredential', 'ManagedIdentityCredential', 'WorkloadIdentityCredential',
+              'SharedTokenCacheCredential', 'VisualStudioCredential', 'VisualStudioCodeCredential',
+              'AzurePowerShellCredential', 'AzureDeveloperCliCredential', 'InteractiveBrowserCredential'
+            )
+          } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $metadata -Encoding utf8
+          $config = Join-Path $root 'tauri.windows-signing.json'
+          $wrapper = Join-Path $env:GITHUB_WORKSPACE 'scripts/windows-signing.ps1'
+          @{
+            bundle = @{ windows = @{ signCommand = @{
+              cmd = (Get-Command pwsh).Source
+              args = @('-NoProfile', '-File', $wrapper, '-Mode', 'sign', '-FilePath', '%1')
+            } } }
+          } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $config -Encoding utf8
+          "WINDOWS_SIGNING_METADATA=$metadata" >> $env:GITHUB_ENV
+          "WINDOWS_SIGNING_CONFIG=$config" >> $env:GITHUB_ENV
 
       - uses: pnpm/action-setup@v4
         with:
@@ -62,7 +181,7 @@ jobs:
           workspaces: src-tauri
 
       - name: Install frontend dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Setup Apple code signing
         if: startsWith(matrix.platform, 'macos')
@@ -94,6 +213,24 @@ jobs:
             exit 1
           fi
 
+      - name: Precompile Windows app
+        if: runner.os == 'Windows'
+        shell: bash
+        run: pnpm tauri build --no-bundle --config "$WINDOWS_SIGNING_CONFIG"
+
+      - name: Login to Azure with OIDC
+        if: runner.os == 'Windows'
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Cache Windows signing token
+        if: runner.os == 'Windows'
+        shell: bash
+        run: az account get-access-token --scope https://codesigning.azure.net/.default --output none
+
       - name: Build Tauri
         shell: bash
         env:
@@ -101,7 +238,17 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # Sign only here; notarization runs once on the DMG via notarytool below.
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: npx tauri build ${{ matrix.args }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo 'Missing signing prerequisite: TAURI_SIGNING_PRIVATE_KEY' >&2
+            exit 1
+          fi
+          if [ "$RUNNER_OS" = Windows ]; then
+            pwsh -NoProfile -File scripts/windows-signing.ps1 -Mode sign -FilePath src-tauri/target/release/skillreg-local.exe
+            pnpm tauri bundle --config "$WINDOWS_SIGNING_CONFIG"
+          else
+            pnpm tauri build ${{ matrix.args }}
+          fi
 
       - name: Validate signed macOS app bundles
         if: startsWith(matrix.platform, 'macos')
@@ -155,147 +302,131 @@ jobs:
             exit 1
           fi
 
-      - name: Collect artifacts
+      - name: Select release artifacts
         shell: bash
+        env:
+          RELEASE_PLATFORM: ${{ matrix.artifact_name }}
+          RUST_TARGET: ${{ matrix.rust_target }}
         run: |
-          mkdir -p artifacts
-          echo "=== All bundle files ==="
-          find src-tauri/target -path "*/release/bundle/*" -type f \( \
-            -name "*.dmg" -o -name "*.app.tar.gz" -o -name "*.app.tar.gz.sig" \
-            -o -name "*.deb" -o -name "*.rpm" \
-            -o -name "*.AppImage" -o -name "*.AppImage.tar.gz" -o -name "*.AppImage.tar.gz.sig" \
-            -o -name "*.exe" -o -name "*.msi" \
-            -o -name "*.nsis.zip" -o -name "*.nsis.zip.sig" \
-          \) | while read f; do
-            echo "  $(basename "$f")"
-            cp "$f" artifacts/
-          done
-          echo "=== Collected ==="
-          ls -la artifacts/
+          bundle="src-tauri/target/release/bundle"
+          if [ -n "$RUST_TARGET" ]; then
+            bundle="src-tauri/target/$RUST_TARGET/release/bundle"
+          fi
+          python scripts/release-artifacts.py collect --bundle "$bundle" \
+            --platform "$RELEASE_PLATFORM" --output artifacts
+
+      - name: Sign and verify Linux artifacts
+        if: runner.os == 'Linux'
+        env:
+          LINUX_SIGNING_PRIVATE_KEY: ${{ secrets.LINUX_SIGNING_PRIVATE_KEY }}
+          LINUX_SIGNING_PASSPHRASE: ${{ secrets.LINUX_SIGNING_PASSPHRASE }}
+          LINUX_SIGNING_PUBLIC_KEY: ${{ vars.LINUX_SIGNING_PUBLIC_KEY }}
+        run: |
+          python - <<'PY'
+          import json, subprocess
+          files = json.loads(subprocess.check_output([
+              'python', 'scripts/release-artifacts.py', 'files',
+              '--directory', 'artifacts', '--platform', 'linux-x86_64'
+          ], text=True))
+          subprocess.run(['bash', 'scripts/linux-signing.sh', 'sign', '--', *files], check=True)
+          PY
+
+      - name: Verify Windows artifacts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/windows-signing.ps1 -Mode verify-artifacts -ArtifactDirectory artifacts `
+            -ApplicationPath src-tauri/target/release/skillreg-local.exe
+
+      - name: Record verified inventory
+        shell: bash
+        env:
+          RELEASE_PLATFORM: ${{ matrix.artifact_name }}
+        run: |
+          identity=()
+          if [ "$RUNNER_OS" = Windows ]; then
+            identity+=(--windows-subject "$WINDOWS_SIGNING_SUBJECT")
+          elif [ "$RUNNER_OS" = Linux ]; then
+            identity+=(--linux-fingerprint "$LINUX_SIGNING_KEY_FINGERPRINT")
+          fi
+          python scripts/release-artifacts.py record --directory artifacts \
+            --platform "$RELEASE_PLATFORM" --commit "$GITHUB_SHA" \
+            --version "${GITHUB_REF_NAME#v}" "${identity[@]}"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: build-${{ matrix.artifact_name }}
-          path: artifacts/*
+          path: artifacts/
+          if-no-files-found: error
+
+      - name: Remove Windows signing configuration
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'windows-signing'
+          if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
 
   publish:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      WINDOWS_SIGNING_SUBJECT: ${{ vars.WINDOWS_SIGNING_SUBJECT }}
+      LINUX_SIGNING_PUBLIC_KEY: ${{ vars.LINUX_SIGNING_PUBLIC_KEY }}
+      LINUX_SIGNING_KEY_FINGERPRINT: ${{ vars.LINUX_SIGNING_KEY_FINGERPRINT }}
 
     steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+
+      - name: Install public signature verifier
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnupg
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: build-*
-          path: dist
+          path: downloaded
 
-      - name: List all artifacts
-        run: find dist -type f | sort
-
-      - name: Create release and generate latest.json
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
+      - name: Prepare verified release
         run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          VERSION="${TAG#v}"
-          PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          BASE_URL="https://github.com/${GH_REPO}/releases/download/${TAG}"
+          python scripts/release-artifacts.py prepare --input downloaded --output release-assets \
+            --commit "$GITHUB_SHA" --tag "$GITHUB_REF_NAME" --repository "$GITHUB_REPOSITORY" \
+            --windows-subject "$WINDOWS_SIGNING_SUBJECT" \
+            --linux-fingerprint "$LINUX_SIGNING_KEY_FINGERPRINT" \
+            --publication release-publication.json --notes release-notes.md
 
-          echo "Creating release ${TAG}"
-          gh release create "$TAG" \
-            --repo "$GH_REPO" \
-            --title "SkillReg v${VERSION}" \
-            --notes "See the assets below for download links." \
-            --draft
+      - name: Verify transferred Linux signatures
+        run: |
+          python - <<'PY'
+          import json, subprocess
+          files = json.loads(subprocess.check_output([
+              'python', 'scripts/release-artifacts.py', 'files',
+              '--directory', 'downloaded/build-linux-x86_64', '--platform', 'linux-x86_64'
+          ], text=True))
+          subprocess.run(['bash', 'scripts/linux-signing.sh', 'verify', '--', *files], check=True)
+          PY
 
-          # Upload all release assets (exclude .sig files and updater archives)
-          echo "=== Uploading release assets ==="
-          find dist -type f \( -name "*.dmg" -o -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" -o -name "*.exe" -o -name "*.msi" \) | while read f; do
-            NAME=$(basename "$f")
-            echo "  Uploading $NAME"
-            gh release upload "$TAG" "$f" --repo "$GH_REPO" --clobber
-          done
-
-          # Upload updater archives (.app.tar.gz, .AppImage.tar.gz, .nsis.zip)
-          echo "=== Uploading updater archives ==="
-
-          # macOS aarch64 - rename to include arch
-          MACOS_ARM=$(find dist/build-darwin-aarch64 -name "*.app.tar.gz" ! -name "*.sig" 2>/dev/null | head -1)
-          if [ -n "$MACOS_ARM" ]; then
-            cp "$MACOS_ARM" "SkillReg_aarch64.app.tar.gz"
-            gh release upload "$TAG" "SkillReg_aarch64.app.tar.gz" --repo "$GH_REPO" --clobber
-            echo "  Uploaded SkillReg_aarch64.app.tar.gz"
-          fi
-
-          # macOS x86_64 - rename to include arch
-          MACOS_X64=$(find dist/build-darwin-x86_64 -name "*.app.tar.gz" ! -name "*.sig" 2>/dev/null | head -1)
-          if [ -n "$MACOS_X64" ]; then
-            cp "$MACOS_X64" "SkillReg_x64.app.tar.gz"
-            gh release upload "$TAG" "SkillReg_x64.app.tar.gz" --repo "$GH_REPO" --clobber
-            echo "  Uploaded SkillReg_x64.app.tar.gz"
-          fi
-
-          # Linux AppImage.tar.gz
-          LINUX_TAR=$(find dist/build-linux-x86_64 -name "*.AppImage.tar.gz" ! -name "*.sig" 2>/dev/null | head -1)
-          if [ -n "$LINUX_TAR" ]; then
-            gh release upload "$TAG" "$LINUX_TAR" --repo "$GH_REPO" --clobber
-            echo "  Uploaded $(basename "$LINUX_TAR")"
-          fi
-
-          # Windows nsis.zip
-          WIN_ZIP=$(find dist/build-windows-x86_64 -name "*.nsis.zip" ! -name "*.sig" 2>/dev/null | head -1)
-          if [ -n "$WIN_ZIP" ]; then
-            gh release upload "$TAG" "$WIN_ZIP" --repo "$GH_REPO" --clobber
-            echo "  Uploaded $(basename "$WIN_ZIP")"
-          fi
-
-          # === Generate latest.json ===
-          echo "=== Generating latest.json ==="
-          PLATFORMS="{}"
-
-          # macOS aarch64
-          SIG=$(find dist/build-darwin-aarch64 -name "*.app.tar.gz.sig" 2>/dev/null | head -1)
-          if [ -n "$SIG" ]; then
-            PLATFORMS=$(echo "$PLATFORMS" | jq --arg s "$(cat "$SIG")" --arg u "${BASE_URL}/SkillReg_aarch64.app.tar.gz" \
-              '. + {"darwin-aarch64": {"signature": $s, "url": $u}}')
-            echo "  darwin-aarch64 OK"
-          fi
-
-          # macOS x86_64
-          SIG=$(find dist/build-darwin-x86_64 -name "*.app.tar.gz.sig" 2>/dev/null | head -1)
-          if [ -n "$SIG" ]; then
-            PLATFORMS=$(echo "$PLATFORMS" | jq --arg s "$(cat "$SIG")" --arg u "${BASE_URL}/SkillReg_x64.app.tar.gz" \
-              '. + {"darwin-x86_64": {"signature": $s, "url": $u}}')
-            echo "  darwin-x86_64 OK"
-          fi
-
-          # Linux
-          SIG=$(find dist/build-linux-x86_64 -name "*.AppImage.tar.gz.sig" 2>/dev/null | head -1)
-          if [ -n "$SIG" ] && [ -n "$LINUX_TAR" ]; then
-            PLATFORMS=$(echo "$PLATFORMS" | jq --arg s "$(cat "$SIG")" --arg u "${BASE_URL}/$(basename "$LINUX_TAR")" \
-              '. + {"linux-x86_64": {"signature": $s, "url": $u}}')
-            echo "  linux-x86_64 OK"
-          fi
-
-          # Windows
-          SIG=$(find dist/build-windows-x86_64 -name "*.nsis.zip.sig" 2>/dev/null | head -1)
-          if [ -n "$SIG" ] && [ -n "$WIN_ZIP" ]; then
-            PLATFORMS=$(echo "$PLATFORMS" | jq --arg s "$(cat "$SIG")" --arg u "${BASE_URL}/$(basename "$WIN_ZIP")" \
-              '. + {"windows-x86_64": {"signature": $s, "url": $u}}')
-            echo "  windows-x86_64 OK"
-          fi
-
-          jq -n \
-            --arg v "$VERSION" \
-            --arg n "SkillReg v$VERSION" \
-            --arg d "$PUB_DATE" \
-            --argjson p "$PLATFORMS" \
-            '{version: $v, notes: $n, pub_date: $d, platforms: $p}' > latest.json
-
-          echo "=== latest.json ==="
-          cat latest.json
-
-          gh release upload "$TAG" latest.json --repo "$GH_REPO" --clobber
-          echo "latest.json uploaded to ${TAG}"
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          import json, os, pathlib, subprocess
+          publication = json.loads(pathlib.Path('release-publication.json').read_text())
+          subprocess.run([
+              'gh', 'release', 'create', publication['tag'], *publication['assets'],
+              '--repo', os.environ['GITHUB_REPOSITORY'], '--verify-tag',
+              '--title', f"SkillReg v{publication['version']}",
+              '--notes-file', 'release-notes.md', '--draft',
+          ], check=True)
+          PY

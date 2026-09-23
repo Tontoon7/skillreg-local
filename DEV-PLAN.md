@@ -664,7 +664,24 @@ open = "5"                         # Ouvrir URL dans le navigateur
 - [x] Packaging config : `.dmg` (macOS), `.msi` (Windows), `.AppImage` (Linux)
 - [x] GitHub Actions CI/CD : build cross-platform
 - [x] Releases macOS signées + notarized en CI (nécessite secrets Apple GitHub)
+- [x] Chaîne de release Windows Authenticode (Azure Artifact Signing OIDC) et Linux OpenPGP détachée, avec vérification native et inventaire strict avant création du brouillon ; recette Azure réelle à effectuer sur un run autorisé et configuré
 - [ ] Page de téléchargement sur skillreg.dev
+
+La release conserve les quatre plateformes updater et `createUpdaterArtifacts: "v1Compatible"`.
+`scripts/windows-signing.ps1` est appelé pendant le packaging par un overlay CI Tauri
+temporaire ; le binaire et les installateurs sont signés avant les archives updater.
+Windows compile d'abord via `pnpm tauri build --no-bundle` avec cet overlay, puis
+enchaîne connexion Azure OIDC, préchargement du jeton du scope de signature,
+signature du binaire précompilé et `pnpm tauri bundle` sans recompilation :
+la compilation ne consomme ainsi pas la durée de validité de l'assertion OIDC.
+La signature préalable couvre le binaire d'origine restauré par le bundler ;
+le hook continue de signer et vérifier chaque copie modifiée pour un installateur.
+`scripts/linux-signing.sh` signe les quatre fichiers Linux finaux et exporte la clé publique.
+Après les contrôles natifs, `scripts/release-artifacts.py` enregistre leurs SHA-256,
+contrôle les transferts, puis prépare les seuls assets autorisés et un `latest.json`
+complet. Le job de publication revérifie OpenPGP avant toute écriture GitHub.
+La configuration et la recette sont décrites dans
+`docs/plans/2026-07-30-windows-linux-release-signing-plan.md`.
 
 ---
 
@@ -703,3 +720,6 @@ Un développeur peut push via le CLI et les non-techniques installent via l'app.
 - react-markdown pour le rendu markdown
 - Pas de secrets en clair dans l'UI (masquage des tokens et env vars)
 - Auto-update signé (Tauri updater avec signature — endpoint configuré)
+- Packaging Windows : signatures Authenticode horodatées, chaîne de confiance et sujet d'éditeur vérifiés, installateur NSIS de l'archive updater identique à l'installateur distribué
+- Téléchargements Linux : signatures OpenPGP `.asc` vérifiées avec empreinte primaire attendue, clé publique distribuée ; vérification manuelle distincte des `.sig` du plugin updater, sans intégration automatique apt/rpm
+- Publication bloquée sur prérequis absent, signature invalide ou inventaire incomplet/modifié ; les inventaires SHA-256 lient les octets transférés aux contrôles natifs et ne sont pas des signatures indépendantes
