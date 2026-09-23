@@ -129,14 +129,6 @@ jobs:
                   raise SystemExit(f'Missing signing prerequisite: {name}')
           PY
 
-      - name: Login to Azure with OIDC
-        if: runner.os == 'Windows'
-        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
       - name: Configure Windows signing hook
         if: runner.os == 'Windows'
         shell: pwsh
@@ -221,6 +213,24 @@ jobs:
             exit 1
           fi
 
+      - name: Precompile Windows app
+        if: runner.os == 'Windows'
+        shell: bash
+        run: pnpm tauri build --no-bundle --config "$WINDOWS_SIGNING_CONFIG"
+
+      - name: Login to Azure with OIDC
+        if: runner.os == 'Windows'
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Cache Windows signing token
+        if: runner.os == 'Windows'
+        shell: bash
+        run: az account get-access-token --scope https://codesigning.azure.net/.default --output none
+
       - name: Build Tauri
         shell: bash
         env:
@@ -233,11 +243,12 @@ jobs:
             echo 'Missing signing prerequisite: TAURI_SIGNING_PRIVATE_KEY' >&2
             exit 1
           fi
-          args=()
           if [ "$RUNNER_OS" = Windows ]; then
-            args+=(--config "$WINDOWS_SIGNING_CONFIG")
+            pwsh -NoProfile -File scripts/windows-signing.ps1 -Mode sign -FilePath src-tauri/target/release/skillreg-local.exe
+            pnpm tauri bundle --config "$WINDOWS_SIGNING_CONFIG"
+          else
+            pnpm tauri build ${{ matrix.args }}
           fi
-          pnpm tauri build ${{ matrix.args }} "${args[@]}"
 
       - name: Validate signed macOS app bundles
         if: startsWith(matrix.platform, 'macos')

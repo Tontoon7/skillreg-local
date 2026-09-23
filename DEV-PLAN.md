@@ -670,6 +670,12 @@ open = "5"                         # Ouvrir URL dans le navigateur
 La release conserve les quatre plateformes updater et `createUpdaterArtifacts: "v1Compatible"`.
 `scripts/windows-signing.ps1` est appelé pendant le packaging par un overlay CI Tauri
 temporaire ; le binaire et les installateurs sont signés avant les archives updater.
+Windows compile d'abord via `pnpm tauri build --no-bundle` avec cet overlay, puis
+enchaîne connexion Azure OIDC, préchargement du jeton du scope de signature,
+signature du binaire précompilé et `pnpm tauri bundle` sans recompilation :
+la compilation ne consomme ainsi pas la durée de validité de l'assertion OIDC.
+La signature préalable couvre le binaire d'origine restauré par le bundler ;
+le hook continue de signer et vérifier chaque copie modifiée pour un installateur.
 `scripts/linux-signing.sh` signe les quatre fichiers Linux finaux et exporte la clé publique.
 Après les contrôles natifs, `scripts/release-artifacts.py` enregistre leurs SHA-256,
 contrôle les transferts, puis prépare les seuls assets autorisés et un `latest.json`

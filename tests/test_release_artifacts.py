@@ -358,11 +358,27 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_build_barrier_and_native_checks_are_ordered(self):
         workflow = (SCRIPT.parents[1] / ".github/workflows/release.yml").read_text()
         build = workflow.split("  publish:\n", 1)[0]
-        steps = ["Test release artifact contract", "Validate signing prerequisites", "Build Tauri",
+        steps = ["Test release artifact contract", "Validate signing prerequisites",
+                 "Configure Windows signing hook", "Install frontend dependencies", "Precompile Windows app",
+                 "Login to Azure with OIDC", "Cache Windows signing token", "Build Tauri",
                  "Select release artifacts", "Sign and verify Linux artifacts", "Verify Windows artifacts",
                  "Record verified inventory", "Upload artifacts"]
         positions = [build.index("name: " + step) for step in steps]
         self.assertEqual(positions, sorted(positions))
+        build_steps = build.split("\n      - ")[1:]
+        step_headers = [step.splitlines()[0] for step in build_steps]
+        build_index = step_headers.index("name: Build Tauri")
+        self.assertEqual(step_headers[build_index - 3:build_index], [
+            "name: Precompile Windows app", "name: Login to Azure with OIDC",
+            "name: Cache Windows signing token",
+        ])
+        precompile, login, token = build_steps[build_index - 3:build_index]
+        for step in (precompile, login, token):
+            self.assertIn("if: runner.os == 'Windows'", step)
+        self.assertIn('pnpm tauri build --no-bundle --config "$WINDOWS_SIGNING_CONFIG"', precompile)
+        self.assertIn("uses: azure/login@", login)
+        self.assertIn("shell: bash", token)
+        self.assertIn("run: az account get-access-token --scope https://codesigning.azure.net/.default --output none", token)
         for required in ["test-linux-signing.sh", "test-windows-signing.ps1", "linux-signing.sh",
                          "windows-signing.ps1", "release-artifacts.py", "if-no-files-found: error",
                          "TAURI_SIGNING_PRIVATE_KEY", "--config"]:
@@ -372,8 +388,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("signCommand = @{", hook)
         self.assertIn("args = @('-NoProfile', '-File', $wrapper, '-Mode', 'sign', '-FilePath', '%1')", hook)
         build_step = build.split("name: Build Tauri", 1)[1].split("\n      - ", 1)[0]
-        self.assertIn('if [ "$RUNNER_OS" = Windows ]; then\n            args+=(--config "$WINDOWS_SIGNING_CONFIG")\n          fi', build_step)
-        self.assertIn('"${args[@]}"', build_step)
+        self.assertIn('if [ "$RUNNER_OS" = Windows ]; then\n'
+                      '            pwsh -NoProfile -File scripts/windows-signing.ps1 -Mode sign '
+                      '-FilePath src-tauri/target/release/skillreg-local.exe\n'
+                      '            pnpm tauri bundle --config "$WINDOWS_SIGNING_CONFIG"\n'
+                      '          else\n            pnpm tauri build ${{ matrix.args }}\n          fi', build_step)
         windows_check = build.split("name: Verify Windows artifacts", 1)[1].split("\n      - ", 1)[0]
         self.assertIn("windows-signing.ps1 -Mode verify-artifacts", windows_check)
         self.assertIn("-ApplicationPath", windows_check)

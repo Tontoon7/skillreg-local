@@ -53,12 +53,45 @@ attendu provient du certificat du profil, pas d'une chaîne inventée. Une rotat
 des certificats Azure ne nécessite pas de changement d'empreinte dans le dépôt :
 le contrôle porte sur la chaîne de confiance et le sujet exact.
 
+### Connexion OIDC au moment de la signature
+
 Le workflow accorde `contents: write` uniquement au job `publish` et
 `id-token: write` au job de build. Seule la ligne Windows de la matrice ouvre une
 session Azure. Les métadonnées Dlib excluent toutes les méthodes documentées
 autres qu'Azure CLI, qui utilise la session OIDC. L'action Azure nettoie la session
 en fin de job ; la configuration temporaire Windows est également supprimée,
 y compris après échec.
+
+L'assertion OIDC GitHub expire en quelques minutes et Azure CLI ne peut pas la
+renouveler dans cette session. Une connexion avant l'installation ou la compilation
+Rust risque donc de provoquer `AADSTS700024` lors de la première signature.
+Le runner Windows termine d'abord
+`pnpm tauri build --no-bundle --config "$WINDOWS_SIGNING_CONFIG"` :
+Tauri construit le frontend et le Rust en release,
+avec sa configuration et ses features habituelles, sans exécuter le hook de signature.
+Les trois étapes suivantes restent consécutives :
+
+1. `azure/login` ouvre la session OIDC.
+2. `az account get-access-token --scope https://codesigning.azure.net/.default --output none`
+   récupère immédiatement le jeton du service de signature dans le cache Azure CLI,
+   sans l'afficher. Un échec arrête le job.
+3. `Build Tauri` signe et vérifie le binaire précompilé avec `windows-signing.ps1`,
+   puis exécute `pnpm tauri bundle --config "$WINDOWS_SIGNING_CONFIG"` sous Windows :
+   packaging, signatures Authenticode et signatures updater, sans relancer la
+   compilation. Les autres plateformes conservent `pnpm tauri build`.
+
+Tauri CLI 2.10.0 conserve une copie du binaire principal, le modifie et le signe
+pour chaque installateur, puis restaure cette copie d'origine. Signer le binaire
+précompilé avant `bundle` garantit que celui restauré reste signé pour le contrôle
+final `-ApplicationPath`. Le hook signe et vérifie toujours chaque binaire modifié
+avant son inclusion dans l'installateur ; aucun contrôle de signature n'est retiré.
+
+Le jeton d'accès mis en cache reste lui-même limité dans le temps ; une recette
+Azure autorisée doit confirmer que le packaging se termine avant son expiration.
+Ne pas intercaler d'installation ou de compilation entre connexion et packaging,
+ni supposer qu'une session OIDC permet de renouveler indéfiniment les jetons.
+`test_build_barrier_and_native_checks_are_ordered` verrouille cet ordre et les
+commandes de précompilation, de préchargement et de packaging.
 
 ## Chaîne de contrôle
 
@@ -72,6 +105,8 @@ y compris après échec.
 3. Générer un overlay Tauri Windows contenant `signCommand` sous forme d'objet
    `cmd` / `args`. Les chemins absolus et `%1` restent des arguments séparés,
    même avec des espaces. Aucun changement de configuration des builds locaux.
+   Précompiler Windows sans bundling, puis ouvrir la session OIDC et précharger
+   le jeton de signature immédiatement avant le packaging, comme décrit ci-dessus.
 4. Le wrapper Windows signe en SHA-256, horodate avec
    `http://timestamp.acs.microsoft.com`, puis exige le code zéro de
    `signtool verify /pa /all /tw`, un statut Authenticode `Valid`, le sujet attendu
@@ -186,4 +221,8 @@ ne pas résoudre le conflit en supprimant les contrôles ou une plateforme.
 - [Hook de signature Windows Tauri](https://v2.tauri.app/distribute/sign/windows/)
 - [Contrat updater Tauri](https://v2.tauri.app/plugin/updater/)
 - [Fédération OIDC GitHub vers Azure](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-azure)
+- [Expiration de l'assertion OIDC dans Azure CLI](https://github.com/Azure/azure-cli/issues/28708)
+- [Préchargement du jeton avec Azure CLI](https://learn.microsoft.com/en-us/cli/azure/account#az-account-get-access-token)
+- [Compilation et packaging séparés avec Tauri CLI](https://v2.tauri.app/reference/cli/)
+- [Sauvegarde, signature et restauration du binaire principal dans Tauri CLI 2.10.0](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.10.0/crates/tauri-bundler/src/bundle.rs)
 - [Commandes opérationnelles GnuPG](https://www.gnupg.org/documentation/manuals/gnupg/Operational-GPG-Commands.html)
