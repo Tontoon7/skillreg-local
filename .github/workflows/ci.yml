@@ -49,7 +49,7 @@ jobs:
         run: pnpm build
 
       - name: Test Rust
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --no-fail-fast --manifest-path src-tauri/Cargo.toml
 
       - name: Check Rust
         run: cargo check --manifest-path src-tauri/Cargo.toml
@@ -74,7 +74,7 @@ jobs:
           workspaces: src-tauri
 
       - name: Test Rust
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --no-fail-fast --manifest-path src-tauri/Cargo.toml
 
       - name: Check Rust
         run: cargo check --manifest-path src-tauri/Cargo.toml
