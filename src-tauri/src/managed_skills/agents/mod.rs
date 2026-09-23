@@ -491,7 +491,7 @@ mod tests {
 
         let result = adapter.detect(&home);
 
-        assert_eq!(result.state, DetectionState::Detected);
+        assert_validated_platform_state(&result);
         assert!(result.requires_restart_after_binding);
         assert_missing(&home.join(".claude/skills"));
 
@@ -559,7 +559,20 @@ mod tests {
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].state, DetectionState::Error);
-        assert_eq!(results[1].state, DetectionState::Detected);
+        assert_validated_platform_state(&results[1]);
+    }
+
+    // Managed links are only enabled on platforms validated by hand (macOS today).
+    fn assert_validated_platform_state(result: &DetectionResult) {
+        if Platform::current() == Platform::Macos {
+            assert_eq!(result.state, DetectionState::Detected);
+        } else {
+            assert_eq!(result.state, DetectionState::Unsupported);
+            assert_eq!(
+                result.detail_code.as_deref(),
+                Some("managed_links_not_validated_on_platform")
+            );
+        }
     }
 
     #[test]

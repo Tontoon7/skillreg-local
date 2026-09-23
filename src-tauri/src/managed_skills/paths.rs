@@ -250,11 +250,15 @@ mod tests {
     #[test]
     fn absolute_parent_and_windows_separator_injections_are_refused() {
         let paths = ManagedPaths::new(test_home()).unwrap();
-        for candidate in [
+        let mut candidates = vec![
             PathBuf::from("/tmp/outside/content"),
             paths.skills_root().join("../outside/content"),
-            paths.skills_root().join(r"acme\publisher\skill\content"),
-        ] {
+        ];
+        // A backslash is the native separator on Windows; elsewhere it smuggles extra segments.
+        if !cfg!(target_os = "windows") {
+            candidates.push(paths.skills_root().join(r"acme\publisher\skill\content"));
+        }
+        for candidate in candidates {
             let error = paths.validate_managed_content_path(&candidate).unwrap_err();
             assert_eq!(error.code(), ManagedErrorCode::ManagedPathOutsideRoot);
         }
