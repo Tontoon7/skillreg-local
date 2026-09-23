@@ -50,17 +50,18 @@ pnpm build                       # tsc (typage de src/) puis vite build vers dis
 pnpm dev                         # Vite seul sur localhost:1420 ; ne s'arrête jamais
 pnpm tauri dev                   # application complète ; ne s'arrête jamais
 pnpm tauri build                 # packaging complet de l'application, lourd
+pnpm tauri:build:local           # packaging local non signé, sans artefacts d'updater
 cargo check --manifest-path src-tauri/Cargo.toml             # compilation Rust sans lancer l'app
 cargo test --manifest-path src-tauri/Cargo.toml              # tests Rust (unitaires et src-tauri/tests)
 cargo test --manifest-path src-tauri/Cargo.toml <nom>        # tests Rust dont le nom contient <nom>
-node --test --experimental-strip-types tests/*.test.ts       # tests TypeScript (pas de script sur main)
+pnpm test                                                    # tests TypeScript (node --test sur tests/*.test.ts)
 node --test --experimental-strip-types tests/env-inventory.test.ts   # un fichier
 bash scripts/check-release-notarization.sh                   # après une modification de release.yml (requiert rg)
 ```
 
 **Validation de l'usine** (commande `check` de la configuration active) : `pnpm format:check && pnpm build`.
 
-Elle ne couvre ni le Rust ni les tests TypeScript. Si tu modifies `src-tauri/`, lance aussi `cargo test --manifest-path src-tauri/Cargo.toml` après `pnpm build` (qui produit `dist/`, référencé par `tauri.conf.json`) ; si tu modifies `src/lib/` ou `tests/`, lance les tests `node --test` ci-dessus. Signale dans ta conclusion ce que tu as lancé.
+Elle ne couvre ni le Rust ni les tests TypeScript. Si tu modifies `src-tauri/`, lance aussi `cargo test --manifest-path src-tauri/Cargo.toml` après `pnpm build` (qui produit `dist/`, référencé par `tauri.conf.json`) ; si tu modifies `src/lib/` ou `tests/`, lance `pnpm test`. Signale dans ta conclusion ce que tu as lancé.
 
 Dans l'usine, ne lance jamais `pnpm tauri dev`, `pnpm dev` ou `pnpm tauri build` : les deux premiers ne s'arrêtent pas, le troisième est un packaging lourd qui n'est pas demandé.
 
@@ -106,15 +107,15 @@ Les tickets de ce dépôt sont exécutés par l'usine de développement d'Axel (
 ## Pièges connus
 
 - La validation de l'usine ne compile pas le Rust : `pnpm build` ne type que `src/` (`tsconfig.json`, `include: ["src"]`) ; ni `src-tauri/` ni `tests/` ne sont vérifiés.
-- Les tests `tests/*.test.ts` n'ont pas de script `test` sur `main` et ne sont lancés par aucune CI ; `tsc` ne les type pas.
+- Les tests `tests/*.test.ts` (`pnpm test`) ne sont lancés par aucune CI ni par la validation de l'usine ; `tsc` ne les type pas.
 - `cargo check` et `cargo test` compilent `tauri.conf.json`, qui référence `../dist` : lance `pnpm build` avant dans un worktree neuf. Le premier build Rust d'un worktree est long (dépendances Tauri complètes).
 - `src-tauri/src/commands/skills.rs` n'est pas au format rustfmt : `cargo fmt` sur tout le crate reformate du code sans rapport avec le ticket. Formate seulement tes fichiers (`rustfmt --edition 2021 <fichier>`).
 - L'URL de l'API `https://app.skillreg.dev` est codée en dur dans `src-tauri/src/commands/auth.rs`, `skills.rs`, `collaboration.rs` et `src/lib/constants.ts` : un changement doit toucher les quatre.
 - La version de l'application vit dans `package.json`, `src-tauri/Cargo.toml` (et `Cargo.lock`) et `src-tauri/tauri.conf.json` ; ils doivent rester identiques.
 - `~/.skillreg/config.json` est écrit par Rust (login) et par le frontend : passe par `useConfigStore.update()`, qui relit le disque avant de fusionner, sinon le token écrit par `login_poll` est écrasé.
 - L'icône de tray est créée en Rust (`lib.rs`), pas dans `tauri.conf.json` ; `src-tauri/tests/tray_config.rs` échoue si `app.trayIcon` y est ajouté.
-- Updater : `plugins.updater.pubkey` doit correspondre au secret `TAURI_SIGNING_PRIVATE_KEY`, et `bundle.createUpdaterArtifacts: "v1Compatible"` produit les `.app.tar.gz` et `.sig` que `release.yml` collecte. Changer l'un ou l'autre casse les mises à jour des installations existantes.
+- Updater : `plugins.updater.pubkey` doit correspondre au secret `TAURI_SIGNING_PRIVATE_KEY`. `bundle.createUpdaterArtifacts` vaut `true` (format natif Tauri 2, verrouillé par `tests/release-hardening.test.ts`) : macOS garde `.app.tar.gz` et `.sig`, mais Windows et Linux signent directement l'installeur (`.exe`, `.msi`, `.AppImage` avec leur `.sig`), alors que `release.yml` cherche encore `.nsis.zip` et `.AppImage.tar.gz` pour `latest.json`. À aligner avant la prochaine release, sinon Windows et Linux ne reçoivent plus de mise à jour automatique. `pnpm tauri:build:local` désactive ces artefacts (`src-tauri/tauri.local.conf.json`).
 - `.gitignore` exclut `*.png`, `*.jpg` et `*.jpeg` hors `src-tauri/icons/*.png` : une image ajoutée ailleurs n'est pas commitée, sans avertissement.
 - `src-tauri/gen/schemas/desktop-schema 2.json` et `desktop-schema 3.json` sont des doublons iCloud commités par erreur : ne les modifie pas et ne crée aucun fichier suffixé ` 2`.
 - `scripts/check-release-notarization.sh` utilise `rg`, absent du PATH de l'usine sur le Mac mini : il y échoue même quand `release.yml` est correct.
-- La branche `feat/activation-reset` (non fusionnée, suivie par `skillreg-app` issue #2) modifie l'activation, le setup, la release, les dépendances Tauri et ajoute un script `pnpm test` : vérifie-la avant de toucher ces zones.
+- Le setup ouvre `https://app.skillreg.dev/onboarding?source=desktop` pour créer un workspace : une release du desktop qui contient ce parcours doit suivre le déploiement de l'app qui sert `/onboarding`.
