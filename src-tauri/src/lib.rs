@@ -109,6 +109,7 @@ pub fn run() {
             commands::skills::check_updates,
             commands::slash_commands::list_commands,
             commands::slash_commands::get_command,
+            commands::slash_commands::publish_command_version,
             commands::slash_commands::pull_command,
             commands::slash_commands::list_local_commands,
             commands::slash_commands::remove_command,

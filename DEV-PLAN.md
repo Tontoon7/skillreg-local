@@ -56,10 +56,10 @@ skillreg-local/
 │   │   ├── main.rs             ← Entry point Tauri
 │   │   ├── lib.rs              ← App setup, tray icon, command registration
 │   │   ├── commands/           ← Tauri commands (invoked from frontend)
-│   │   │   ├── mod.rs          ← Module exports (auth, config, env, local, skills)
+│   │   │   ├── mod.rs          ← Module exports (including slash_commands)
 │   │   │   ├── auth.rs         ← login_initiate, login_poll, login_with_token, whoami, logout, open_url
 │   │   │   ├── skills.rs       ← list_skills, get_skill, search_skills, pull_skill, push_skill, uninstall_skill, delete_skill, check_updates
-│   │   │   ├── slash_commands.rs ← registry/local slash command install, update, remove
+│   │   │   ├── slash_commands.rs ← slash command registry, install, update, remove, publish version
 │   │   │   ├── local.rs        ← scan_local_skills, parse_frontmatter
 │   │   │   ├── config.rs       ← read_config, write_config
 │   │   │   └── env.rs          ← EnvStore org-level + legacy env commands
@@ -75,19 +75,21 @@ skillreg-local/
 │   │   ├── Dashboard.tsx       ← Orgs overview (cards cliquables)
 │   │   ├── Catalog.tsx         ← Browse/search skills + pagination + SkillCard inline
 │   │   ├── SkillDetail.tsx     ← Detail + 3 tabs (readme/versions/files) + install sidebar
-│   │   ├── Commands.tsx        ← Browse/install/update/remove slash commands
+│   │   ├── Commands.tsx        ← Browse/install/update/remove slash commands + publish version
 │   │   ├── Installed.tsx       ← Local skills groupés par agent/scope + update + uninstall
 │   │   ├── Publish.tsx         ← Push skill (file picker dialog + preview + dry-run)
 │   │   ├── EnvVars.tsx         ← Env vars CRUD + masking + import .env
 │   │   └── Settings.tsx        ← User info, org/agent/scope, theme toggle, sign out
 │   ├── components/
+│   │   ├── PublishCommandDialog.tsx ← Publish a version of an existing registry command
 │   │   ├── ui/                 ← shadcn/ui (badge, button, card, input, label, select)
 │   │   └── layout/
 │   │       ├── AppShell.tsx    ← Main layout (titlebar + sidebar + content)
 │   │       ├── Sidebar.tsx     ← Navigation sidebar (7 items)
 │   │       └── Titlebar.tsx    ← Custom window titlebar (draggable + min/max/close)
 │   ├── lib/
-│   │   ├── api.ts              ← 20 invoke() wrappers typés
+│   │   ├── api.ts              ← Wrappers invoke() typés, dont publishCommandVersion
+│   │   ├── command-publishing.ts ← Pure draft preparation and command publication validation
 │   │   ├── store.ts            ← Zustand stores (useAuthStore, useConfigStore)
 │   │   ├── types.ts            ← Types partagés (Rust ↔ TS)
 │   │   ├── constants.ts        ← API_BASE_URL (pour verificationUrl côté front)
@@ -128,9 +130,29 @@ L'app desktop consomme la même API REST que le CLI. Base URL hardcodée : `http
 | | `/api/v1/orgs/{org}/skills/{name}/versions/{v}/download` | GET | Token | Télécharger tarball |
 | **Commands** | `/api/v1/orgs/{org}/commands` | GET | Token | Lister slash commands |
 | | `/api/v1/orgs/{org}/commands/{name}` | GET | Token | Détail + versions d'une command |
+| | `/api/v1/orgs/{org}/commands/{name}/versions` | POST | Token `write` ou `admin` | Publier une version d'une commande existante |
 | **Search** | `/api/v1/search` | GET | Non | Recherche full-text |
 | **Tokens** | `/api/v1/orgs/{org}/tokens` | GET/POST | Token | Lister/créer tokens |
 | | `/api/v1/orgs/{org}/tokens/{id}` | DELETE | Token | Révoquer token |
+
+### Publication de versions de commandes
+
+Le frontend appelle `publishCommandVersion(org, name, input)` dans `src/lib/api.ts`. Le wrapper invoque `publish_command_version` ; Rust envoie un unique POST JSON authentifié avec le jeton connecté et les quatre champs explicites :
+
+```json
+{
+  "version": "1.0.1",
+  "content": "Review the current diff...",
+  "agentCompatibility": ["claude", "codex"],
+  "scope": "org"
+}
+```
+
+La réponse HTTP 201 est `{ "version": { ...CommandVersion } }`. L'API exige le scope de jeton `write` ou `admin`, refuse une commande absente avec 404 et une version déjà publiée avec 409. Le rôle d'organisation affiché par le desktop ne suffit pas à déterminer ce droit.
+
+Le numéro est saisi explicitement, unique et conforme à `/^\d+\.\d+\.\d+(-[\w.]+)?(\+[\w.]+)?$/`. Le serveur désigne la version publiée comme `latestVersion`, incrémente `totalVersions` et reprend ses agents et sa portée, sans imposer de progression numérique. Le contenu est du texte brut, limité après `trim()` à 1–20 000 unités UTF-16 ; les espaces et retours internes sont conservés. Les agents sont `claude`, `codex`, `cursor` (un à trois), et la portée de publication est `org`, `project` ou `user` (`CommandPublicationScope`, distinct de `ScopeType` pour les installations).
+
+La publication reprend uniquement le contenu du registre et ne modifie ni les fichiers de commandes installés ni leur manifeste. Les listes du registre et des installations locales sont rechargées après succès ; chaque installation conserve sa version jusqu'à une action explicite d'installation ou de mise à jour.
 
 ### Auth Flow (Device Authorization)
 
@@ -229,6 +251,20 @@ async fn check_updates(api_url: String, token: String, org: String, local_skills
     -> Result<Vec<UpdateAvailable>, String>
 // Compare local versions vs registry latest versions
 ```
+
+### Commands (publication dans le registre)
+
+```rust
+#[tauri::command]
+async fn publish_command_version(
+    org: String,
+    name: String,
+    input: PublishCommandVersionInput,
+) -> Result<CommandVersion, String>
+// Validate input, normalize name, encode URL segments, send one authenticated JSON POST
+```
+
+`PublishCommandVersionInput` est sérialisé en camelCase avec `version`, `content`, `agentCompatibility` et `scope`. Les contrôles Rust portent sur les champs requis, le contenu (longueur `encode_utf16().count()` après nettoyage compatible avec `trim()` JavaScript), les agents et la portée ; l'API reste responsable du format complet et de l'unicité de version. Les erreurs HTTP passent par `format_api_error()` avec le contexte `Command version publish failed`, les erreurs réseau et réponses invalides sont distinguées. Le client de publication désactive les retries et redirections HTTP, avec un délai maximal de 30 secondes ; ni le jeton ni le contenu ne sont journalisés.
 
 ### Config
 
@@ -508,6 +544,20 @@ Step 3/3 — Scope
 │         │    mais non configuré                     │
 └─────────┴────────────────────────────────────────┘
 ```
+
+---
+
+### 6.9 Commands — Publier une version
+
+Chaque carte du registre propose **Publish version**, indépendamment de l'installation locale, de l'agent et du dossier projet sélectionnés. `PublishCommandDialog` affiche l'organisation et le nom cibles, puis charge le détail via `getCommand()`.
+
+Le formulaire reprend le contenu brut de la version référencée par `latestVersion` (la première version seulement si cette référence est absente), ses agents et sa portée, avec repli sur les métadonnées de la commande pour les agents vides ou la portée absente. Une référence `latestVersion` incohérente affiche une erreur et permet de recharger ; une commande sans version démarre avec un contenu vide. Une portée inconnue ou des agents toujours absents imposent une sélection explicite. Aucun contenu installé avec frontmatter ou titre généré pour l'agent n'est importé.
+
+L'utilisateur saisit une nouvelle version, modifie le texte, choisit les agents compatibles et la portée de commande. Le formulaire rappelle la version courante et le fait que la publication devient la version courante. `command-publishing.ts` prépare ce brouillon et valide les champs sans IPC. Les champs invalides et les versions déjà présentes bloquent l'envoi.
+
+Pendant le POST, les champs et fermetures ordinaires sont désactivés, et une garde empêche les doubles soumissions. Les erreurs conservent le brouillon. Au succès, le dialogue se ferme, la confirmation identifie `@organisation/commande@version` et le registre est rechargé ; un échec de ce rechargement laisse la confirmation visible et propose de réessayer le chargement.
+
+Changer d'organisation ferme le dialogue ; les réponses obsolètes ne remplacent pas les données actives. Un POST déjà envoyé reste lié à son organisation d'origine. Le dialogue gère le focus initial, son confinement et sa restauration, la fermeture par Échap hors publication, les libellés des champs et les annonces accessibles d'erreur et de succès. La création d'une commande portant un nouveau nom reste hors de ce parcours.
 
 ---
 

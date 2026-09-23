@@ -78,7 +78,8 @@
 - [x] Support des chemins locaux commands : `.claude/commands`, `.cursor/commands`, `.codex/skills`
 - [x] Manifest local partagé avec le CLI : `~/.skillreg/commands.json`
 - [x] Vue des commands installées localement avec update et remove
-- [ ] Création/publication de nouvelles versions de commands depuis le desktop
+- [x] Publier une nouvelle version d'une commande existante depuis le desktop
+- [ ] Créer une nouvelle commande depuis le desktop
 
 ---
 

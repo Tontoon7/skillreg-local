@@ -25,7 +25,7 @@ Stack : Tauri v2, Rust (reqwest, serde, sha2, tar, flate2, dirs, open, keyring-c
 | `src-tauri/src/commands/env.rs` | Variables d'environnement par organisation, trousseau du système, fichier de repli, migration de l'ancien format |
 | `src-tauri/src/commands/config.rs` | Lecture et écriture de `~/.skillreg/config.json` |
 | `src-tauri/src/commands/auto_update.rs`, `installed_manifest.rs` | Mises à jour automatiques des skills, manifeste `~/.skillreg/installed.json` |
-| `src-tauri/src/commands/slash_commands.rs` | Slash commands du registre, manifeste `~/.skillreg/commands.json` |
+| `src-tauri/src/commands/slash_commands.rs` | Slash commands du registre : installation, mise à jour, suppression locale, publication de versions ; manifeste `~/.skillreg/commands.json` |
 | `src-tauri/src/commands/api_error.rs` | Mise en forme des erreurs d'API (limites de plan, paiement) |
 | `src-tauri/tauri.conf.json`, `capabilities/`, `icons/` | Configuration Tauri (identifiant `com.skillreg.local`, updater), permissions, icônes |
 | `src-tauri/gen/schemas/` | Schémas générés par Tauri : ne pas éditer à la main |
@@ -33,9 +33,10 @@ Stack : Tauri v2, Rust (reqwest, serde, sha2, tar, flate2, dirs, open, keyring-c
 | `src/App.tsx`, `src/main.tsx` | Routes, garde d'authentification, route de setup ; point d'entrée et restauration du thème |
 | `src/pages/` | Login, Setup, Dashboard, Catalog, PublicCatalog, SkillDetail, Commands, Installed, EnvVars, Settings |
 | `src/components/` | Dialogues (publication, proposition, suppression, variables), `UpdateChecker`, `ValidationBadge`, `layout/` (AppShell, Sidebar, Titlebar), `ui/` |
+| `src/components/PublishCommandDialog.tsx` | Publication d'une version de commande existante depuis Commands : contenu brut, version, agents et portée |
 | `src/lib/api.ts` | Wrappers `invoke()` typés, seule porte vers le backend Rust |
 | `src/lib/store.ts`, `types.ts`, `constants.ts` | Stores Zustand, types partagés Rust et TypeScript, `API_BASE_URL`, agents, portées |
-| `src/lib/*.ts` (autres) | Logique sans IPC : inventaire des variables (`env-inventory.ts`) et regroupement des skills installées (`installed-skill-groups.ts`), testés dans `tests/` ; actions locales, notifications, couleurs de tags, `cn()` |
+| `src/lib/*.ts` (autres) | Logique sans IPC : inventaire des variables (`env-inventory.ts`), regroupement des skills installées (`installed-skill-groups.ts`), préremplissage et validation de publication de commandes (`command-publishing.ts`), testés dans `tests/` ; actions locales, notifications, couleurs de tags, `cn()` |
 | `src/styles/globals.css` | Base Tailwind, variables des thèmes sombre et clair, prose |
 | `tests/*.test.ts` | Tests `node:test` de la logique de `src/lib` |
 | `scripts/check-release-notarization.sh` | Garde-fou : vérifie que `release.yml` notarise toujours les DMG |
@@ -72,6 +73,7 @@ Dans l'usine, ne lance jamais `pnpm tauri dev`, `pnpm dev` ou `pnpm tauri build`
 - Biome pour le frontend : tabulations, 100 colonnes, imports triés ; `src-tauri/` est exclu. Rust : conventions rustfmt.
 - **HTTP uniquement par Rust** : toute requête vers l'API passe par une commande Rust (`reqwest`) appelée via `invoke()` depuis `src/lib/api.ts`. Le frontend ne fait jamais de `fetch` : cela évite les problèmes CORS du webview et garde le réseau et le système de fichiers côté natif. Schéma : `invoke("commande")` → Rust `reqwest` → API → résultat Rust → frontend.
 - Commandes Rust dans `src-tauri/src/commands/`, déclarées dans `commands/mod.rs` et enregistrées dans `lib.rs` ; elles renvoient `Result<T, String>`. Les structures échangées avec TypeScript dérivent `Serialize`/`Deserialize` en `camelCase` et restent alignées avec `src/lib/types.ts`.
+- **Publication des commandes** : `publishCommandVersion()` → `publish_command_version` → POST `/api/v1/orgs/{org}/commands/{name}/versions`, avec `version`, `content`, `agentCompatibility` et `scope` explicites, réponse `{ version }`. L'API exige le scope de jeton `write` ou `admin` ; ne pas déduire cette autorisation du rôle d'organisation. Le dialogue reste lié à l'organisation et au nom d'origine, sans retry automatique ni modification des installations locales ; créer une nouvelle commande reste hors de ce parcours.
 - Pages dans `src/pages/`, composants réutilisables dans `src/components/`, stores dans `src/lib/store.ts`, wrappers IPC dans `src/lib/api.ts`. Les pages lisent directement les stores (`useAuthStore` : authentification, utilisateur, organisations ; `useConfigStore` : organisation, agent, portée, `setupDone`), sans prop drilling.
 - **Auth** : device flow recommandé (`login_initiate` → POST `/api/v1/auth/cli/initiate`, `open_url`, affichage du `userCode`, `login_poll` toutes les 3 s jusqu'à `status: "complete"`) ou collage d'un token `sr_live_*`, `sr_test_*` ou `sk_*` (`login_with_token` vérifie le format puis appelle `whoami`). Le token est enregistré dans `~/.skillreg/config.json`.
 - **Setup** : après la première connexion, si `setupDone` est faux, redirection vers `/setup` (organisation, agent par défaut claude/codex/cursor, portée par défaut project/user).
@@ -119,3 +121,4 @@ Les tickets de ce dépôt sont exécutés par l'usine de développement d'Axel (
 - `src-tauri/gen/schemas/desktop-schema 2.json` et `desktop-schema 3.json` sont des doublons iCloud commités par erreur : ne les modifie pas et ne crée aucun fichier suffixé ` 2`.
 - `scripts/check-release-notarization.sh` utilise `rg`, absent du PATH de l'usine sur le Mac mini : il y échoue même quand `release.yml` est correct.
 - Le setup ouvre `https://app.skillreg.dev/onboarding?source=desktop` pour créer un workspace : une release du desktop qui contient ce parcours doit suivre le déploiement de l'app qui sert `/onboarding`.
+- Publication de commandes (`slash_commands.rs`) : reprendre le contenu brut du registre, car les fichiers installés pour Claude/Codex ajoutent des enveloppes ; la portée de publication inclut `org`, contrairement à `ScopeType` (`project`/`user`) réservé aux installations. Pour valider la longueur, `trim_command_publication_text()` suit le `trim()` JavaScript : BOM U+FEFF retiré et NEL U+0085 conservé, à l'inverse de `str::trim()` Rust.
