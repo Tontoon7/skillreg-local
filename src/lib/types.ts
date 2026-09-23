@@ -1,4 +1,24 @@
 export type AgentType = "claude" | "codex" | "cursor";
+
+export type AgentDetectionState = "detected" | "not_detected" | "unsupported" | "error";
+
+export interface AgentDetection {
+	agent: AgentType;
+	state: AgentDetectionState;
+	detectedVersion?: string;
+	preferredPath?: string;
+	legacySkillDirs: string[];
+	requiresRestartAfterBinding: boolean;
+	detailCode?: string;
+}
+
+export interface ManagedAgent {
+	agent: AgentType;
+	state: AgentDetectionState;
+	detectedVersion?: string | null;
+	requiresRestartAfterBinding: boolean;
+	detailCode?: string | null;
+}
 export type ScopeType = "project" | "user";
 
 // Config stored in ~/.skillreg/config.json
@@ -175,6 +195,211 @@ export interface InstallResult {
 	envVars: EnvVarDecl[];
 	sha256: string | null;
 	contentHash: string;
+}
+
+export type ManagedSkillStatus =
+	| "installing"
+	| "ready"
+	| "update_available"
+	| "updating"
+	| "action_required"
+	| "conflict"
+	| "error";
+
+export type ManagedBindingStatus =
+	| "ready"
+	| "missing"
+	| "conflict"
+	| "unsupported"
+	| "needs_restart"
+	| "error";
+
+export type ManagedErrorCode =
+	| "MANAGED_PATH_OUTSIDE_ROOT"
+	| "MANIFEST_INVALID"
+	| "MANIFEST_WRITE_FAILED"
+	| "ARCHIVE_CHECKSUM_MISMATCH"
+	| "ARCHIVE_UNSAFE"
+	| "CONTENT_MODIFIED"
+	| "BINDING_CONFLICT"
+	| "BINDING_UNSUPPORTED"
+	| "BINDING_CREATE_FAILED"
+	| "BINDING_VERIFY_FAILED"
+	| "SKILL_SOURCE_NAME_CONFLICT"
+	| "ROLLBACK_FAILED"
+	| "MIGRATION_REQUIRES_ACTION"
+	| "REGISTRY_REQUEST_FAILED"
+	| "DOWNLOAD_METADATA_INVALID"
+	| "MANAGED_INSTALL_BUSY"
+	| "MANAGED_INSTALLATION_NOT_FOUND"
+	| "ACTIVE_ORGANIZATION_UNAUTHORIZED"
+	| "ACTIVE_ORGANIZATION_CONFLICT"
+	| "AUTHENTICATION_REQUIRED"
+	| "LOCAL_CONFIGURATION_INVALID";
+
+export interface ManagedErrorRecord {
+	code: ManagedErrorCode;
+	parameters?: Record<string, string>;
+	occurredAt?: string | null;
+}
+
+export interface ManagedSkillInstallation {
+	installationId: string;
+	consumerOrg: string;
+	sourceOrg: string;
+	skillId: string | null;
+	skillName: string;
+	origin: "registry" | "local";
+	activeVersion: string;
+	status: ManagedSkillStatus;
+	installedAt: string;
+	lastCheckedAt: string | null;
+	lastUpdatedAt: string | null;
+	lastError: ManagedErrorRecord | null;
+}
+
+export interface ManagedSkillBinding {
+	agent: AgentType;
+	status: ManagedBindingStatus;
+	lastCheckedAt: string | null;
+	lastError: ManagedErrorRecord | null;
+	usageObservability: "exact" | "partial" | "unavailable" | "error";
+}
+
+export type ManagedWarningCode =
+	| "binding_conflict"
+	| "binding_unsupported"
+	| "binding_error"
+	| "skill_source_name_conflict"
+	| "cleanup_deferred";
+
+export interface ManagedWarning {
+	code: ManagedWarningCode;
+	agent: AgentType | null;
+}
+
+export interface ManagedInstallResult {
+	installation: ManagedSkillInstallation;
+	bindings: ManagedSkillBinding[];
+	requiredEnvVars: EnvVarDecl[];
+	warnings: ManagedWarning[];
+}
+
+export interface ManagedUninstallResult {
+	installationId: string;
+	removed: boolean;
+	alreadyRemoved: boolean;
+	bindingsRemoved: number;
+	conflicts: number;
+	envValuesPreserved: boolean;
+	cleanupDeferred: boolean;
+}
+
+export interface ActiveOrgSwitchReport {
+	previousOrg: string | null;
+	activeOrg: string;
+	bindingsRemoved: number;
+	bindingsCreated: number;
+	cachedSkillsReused: number;
+}
+
+export interface ManagedOverviewInstallation {
+	installation: ManagedSkillInstallation;
+	bindings: ManagedSkillBinding[];
+	missingEnvVars: EnvVarDecl[];
+}
+
+export interface ManagedOverview {
+	installations: ManagedOverviewInstallation[];
+	agents: ManagedAgent[];
+	autoUpdateEnabled: boolean;
+}
+
+export type MigrationClassification =
+	| "managed_candidate"
+	| "project_scope_leave_untouched"
+	| "modified_leave_untouched"
+	| "missing_leave_record"
+	| "unmanaged_conflict"
+	| "duplicate_identical"
+	| "duplicate_divergent"
+	| "unsupported_agent"
+	| "already_migrated";
+
+export interface MigrationPreviewItem {
+	consumerOrg: string;
+	sourceOrg: string;
+	skillName: string;
+	classification: MigrationClassification;
+	agents: AgentType[];
+}
+
+export interface MigrationPreview {
+	items: MigrationPreviewItem[];
+	managedCandidates: number;
+	projectScopeUntouched: number;
+	modifiedUntouched: number;
+	missingRecords: number;
+	conflicts: number;
+	unsupportedAgents: number;
+	alreadyMigrated: number;
+}
+
+export interface MigrationReport {
+	confirmed: boolean;
+	migrated: number;
+	skipped: number;
+	conflicts: number;
+	errors: number;
+	preview: MigrationPreview;
+}
+
+export type LocalImportClassification =
+	| "importable"
+	| "duplicate_identical"
+	| "duplicate_divergent"
+	| "external_link_untouched"
+	| "already_managed"
+	| "invalid_untouched";
+
+export interface LocalImportPreviewItem {
+	skillName: string;
+	classification: LocalImportClassification;
+	agents: AgentType[];
+}
+
+export interface LocalImportPreview {
+	items: LocalImportPreviewItem[];
+	importable: number;
+	conflicts: number;
+	externalLinksUntouched: number;
+	alreadyManaged: number;
+	invalidUntouched: number;
+}
+
+export interface LocalImportReport {
+	confirmed: boolean;
+	imported: number;
+	skipped: number;
+	conflicts: number;
+	errors: number;
+	preview: LocalImportPreview;
+}
+
+export interface ManagedReconcileReport {
+	checked: number;
+	repaired: number;
+	conflicts: number;
+	failed: number;
+	modifiedContent: number;
+}
+
+export interface ManagedUpdateSummary {
+	checked: number;
+	available: number;
+	updated: number;
+	actionRequired: number;
+	failed: number;
 }
 
 export interface PushResult {
