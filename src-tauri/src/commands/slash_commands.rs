@@ -23,6 +23,15 @@ pub struct CommandVersion {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PublishCommandVersionInput {
+    pub version: String,
+    pub content: String,
+    pub agent_compatibility: Vec<String>,
+    pub scope: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RegistryCommandDetail {
     pub id: Option<String>,
     pub name: String,
@@ -127,10 +136,18 @@ struct GetCommandResponse {
     command: RegistryCommandDetail,
 }
 
-fn get_auth_client() -> Result<(reqwest::Client, String), String> {
+#[derive(Debug, Deserialize)]
+struct PublishCommandVersionResponse {
+    version: CommandVersion,
+}
+
+fn get_auth_client(builder: reqwest::ClientBuilder) -> Result<(reqwest::Client, String), String> {
     let config = read_config()?;
     let token = config.token.ok_or("Not authenticated")?;
-    Ok((reqwest::Client::new(), token))
+    let client = builder
+        .build()
+        .map_err(|e| format!("Cannot create API client: {e}"))?;
+    Ok((client, token))
 }
 
 fn command_manifest_path() -> Result<PathBuf, String> {
@@ -468,6 +485,101 @@ fn current_unix_timestamp_string() -> String {
         .unwrap_or_else(|_| "0".to_string())
 }
 
+fn validate_command_publication(
+    org: &str,
+    name: &str,
+    input: &PublishCommandVersionInput,
+) -> Result<(), String> {
+    let error = |message: &str| format!("Command version publish failed: {message}");
+    if org.trim().is_empty() || matches!(org, "." | "..") {
+        return Err(error("A valid organization is required"));
+    }
+    let name = normalize_command_name(name);
+    if name.is_empty() || matches!(name.as_str(), "." | "..") {
+        return Err(error("A valid command name is required"));
+    }
+    if trim_command_publication_text(&input.version).is_empty() {
+        return Err(error("Version is required"));
+    }
+    let content_length = trim_command_publication_text(&input.content)
+        .encode_utf16()
+        .count();
+    if content_length == 0 || content_length > 20_000 {
+        return Err(error(
+            "Content must contain between 1 and 20,000 UTF-16 code units",
+        ));
+    }
+    if input.agent_compatibility.is_empty() || input.agent_compatibility.len() > 3 {
+        return Err(error("Select between one and three compatible agents"));
+    }
+    for (index, agent) in input.agent_compatibility.iter().enumerate() {
+        if !SUPPORTED_AGENTS.contains(&agent.as_str()) {
+            return Err(error("Compatible agents must be claude, codex or cursor"));
+        }
+        if input.agent_compatibility[..index].contains(agent) {
+            return Err(error("Compatible agents must not contain duplicates"));
+        }
+    }
+    if !matches!(input.scope.as_str(), "org" | "project" | "user") {
+        return Err(error("Command scope must be org, project or user"));
+    }
+    Ok(())
+}
+
+fn trim_command_publication_text(value: &str) -> &str {
+    // ECMAScript trim includes BOM but excludes NEXT LINE, unlike Rust's trim.
+    value.trim_matches(|character: char| {
+        (character.is_whitespace() && character != '\u{0085}') || character == '\u{feff}'
+    })
+}
+
+fn command_publication_client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .retry(reqwest::retry::never())
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(30))
+}
+
+async fn publish_command_version_with_client(
+    client: &reqwest::Client,
+    base_url: &str,
+    token: &str,
+    org: &str,
+    name: &str,
+    mut input: PublishCommandVersionInput,
+) -> Result<CommandVersion, String> {
+    validate_command_publication(org, name, &input)?;
+    input.version = trim_command_publication_text(&input.version).to_string();
+    let name = normalize_command_name(name);
+    let mut url = reqwest::Url::parse(base_url)
+        .map_err(|e| format!("Command version publish failed: Invalid API URL: {e}"))?;
+    url.path_segments_mut()
+        .map_err(|_| "Command version publish failed: Invalid API URL".to_string())?
+        .pop_if_empty()
+        .extend(["api", "v1", "orgs", org, "commands", &name, "versions"]);
+    let response = client
+        .post(url)
+        .bearer_auth(token)
+        .json(&input)
+        .send()
+        .await
+        .map_err(|e| format!("Command version publish failed: Network error: {e}"))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format_api_error(
+            "Command version publish failed",
+            status,
+            &body,
+        ));
+    }
+    response
+        .json::<PublishCommandVersionResponse>()
+        .await
+        .map(|data| data.version)
+        .map_err(|e| format!("Command version publish failed: Invalid response: {e}"))
+}
+
 async fn fetch_command_detail(
     client: &reqwest::Client,
     token: &str,
@@ -501,7 +613,7 @@ async fn fetch_command_detail(
 
 #[tauri::command]
 pub async fn list_commands(org: String) -> Result<Vec<RegistryCommand>, String> {
-    let (client, token) = get_auth_client()?;
+    let (client, token) = get_auth_client(reqwest::Client::builder())?;
     let resp = client
         .get(format!("{}/api/v1/orgs/{}/commands", API_BASE_URL, org))
         .header("Authorization", format!("Bearer {}", token))
@@ -523,8 +635,18 @@ pub async fn list_commands(org: String) -> Result<Vec<RegistryCommand>, String> 
 
 #[tauri::command]
 pub async fn get_command(org: String, name: String) -> Result<RegistryCommandDetail, String> {
-    let (client, token) = get_auth_client()?;
+    let (client, token) = get_auth_client(reqwest::Client::builder())?;
     fetch_command_detail(&client, &token, &org, &name).await
+}
+
+#[tauri::command]
+pub async fn publish_command_version(
+    org: String,
+    name: String,
+    input: PublishCommandVersionInput,
+) -> Result<CommandVersion, String> {
+    let (client, token) = get_auth_client(command_publication_client_builder())?;
+    publish_command_version_with_client(&client, API_BASE_URL, &token, &org, &name, input).await
 }
 
 #[tauri::command]
@@ -536,7 +658,7 @@ pub async fn pull_command(
     scope: String,
     project_dir: Option<String>,
 ) -> Result<CommandInstallResult, String> {
-    let (client, token) = get_auth_client()?;
+    let (client, token) = get_auth_client(reqwest::Client::builder())?;
     let command = fetch_command_detail(&client, &token, &org, &name).await?;
     let selected_version = select_command_version(&command, version.as_deref())?;
     let compatible_agents = if selected_version.agent_compatibility.is_empty() {
@@ -676,7 +798,7 @@ pub async fn update_command(
         validate_scope(value)?;
     }
 
-    let (client, token) = get_auth_client()?;
+    let (client, token) = get_auth_client(reqwest::Client::builder())?;
     let mut manifest = read_command_manifest()?;
     let installed = manifest
         .commands
@@ -762,6 +884,298 @@ pub async fn update_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
+
+    struct PublishServer {
+        base_url: String,
+        stop: oneshot::Sender<()>,
+        task: tokio::task::JoinHandle<Vec<String>>,
+    }
+
+    impl PublishServer {
+        async fn start(response: Option<(u16, &str)>) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base_url = format!("http://{}", listener.local_addr().unwrap());
+            let response = response.map(|(status, body)| {
+                format!(
+                    "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nLocation: /redirected\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+            });
+            let (stop, mut stopped) = oneshot::channel();
+            let task = tokio::spawn(async move {
+                let mut requests = Vec::new();
+                loop {
+                    let (mut stream, _) = tokio::select! {
+                        _ = &mut stopped => break,
+                        connection = listener.accept() => connection.unwrap(),
+                    };
+                    let request = tokio::time::timeout(Duration::from_secs(2), async {
+                        let mut bytes = Vec::new();
+                        loop {
+                            let mut buffer = [0_u8; 4096];
+                            let read = stream.read(&mut buffer).await.unwrap();
+                            assert_ne!(read, 0, "Connection closed before request was complete");
+                            bytes.extend_from_slice(&buffer[..read]);
+                            assert!(bytes.len() < 200_000);
+                            if let Some(end) = bytes.windows(4).position(|part| part == b"\r\n\r\n")
+                            {
+                                let headers = String::from_utf8_lossy(&bytes[..end]);
+                                let length = headers
+                                    .lines()
+                                    .find_map(|line| {
+                                        let (name, value) = line.split_once(':')?;
+                                        name.eq_ignore_ascii_case("content-length")
+                                            .then(|| value.trim().parse::<usize>().unwrap())
+                                    })
+                                    .unwrap();
+                                if bytes.len() >= end + 4 + length {
+                                    break String::from_utf8(bytes).unwrap();
+                                }
+                            }
+                        }
+                    })
+                    .await
+                    .expect("Timed out reading mock request");
+                    requests.push(request);
+                    if let Some(response) = &response {
+                        tokio::time::timeout(
+                            Duration::from_secs(2),
+                            stream.write_all(response.as_bytes()),
+                        )
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    }
+                }
+                requests
+            });
+            Self {
+                base_url,
+                stop,
+                task,
+            }
+        }
+
+        async fn finish(self) -> Vec<String> {
+            self.stop.send(()).unwrap();
+            tokio::time::timeout(Duration::from_secs(2), self.task)
+                .await
+                .unwrap()
+                .unwrap()
+        }
+    }
+
+    fn publish_input() -> PublishCommandVersionInput {
+        PublishCommandVersionInput {
+            version: " 1.2.3-beta.1+build.2 ".to_string(),
+            content: "  Réviser le diff 🦀.\n\n  Preserve indentation.\n".to_string(),
+            agent_compatibility: vec!["claude".to_string(), "codex".to_string()],
+            scope: "org".to_string(),
+        }
+    }
+
+    fn publish_client() -> reqwest::Client {
+        command_publication_client_builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn validates_publication_content_in_utf16_after_trimming() {
+        let mut input = publish_input();
+        for content in ["é".repeat(20_000), "🦀".repeat(10_000)] {
+            input.content = format!("\n {content} \n");
+            assert!(validate_command_publication("acme", "review", &input).is_ok());
+            input.content = format!("{content}x");
+            assert!(validate_command_publication("acme", "review", &input)
+                .unwrap_err()
+                .contains("20,000"));
+        }
+        for scope in ["org", "project", "user"] {
+            input.content = "Content".to_string();
+            input.scope = scope.to_string();
+            assert!(validate_command_publication("acme", "review", &input).is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_publication_inputs_send_no_requests() {
+        let server = PublishServer::start(None).await;
+        let client = publish_client();
+        let mut cases = vec![
+            ("", "review", publish_input()),
+            (" \n", "review", publish_input()),
+            ("acme", " / ", publish_input()),
+            ("..", "review", publish_input()),
+            ("acme", " /.. ", publish_input()),
+        ];
+        let mut input = publish_input();
+        input.version = " \n".to_string();
+        cases.push(("acme", "review", input));
+        for content in [" \n\t".to_string(), "🦀".repeat(10_001)] {
+            let mut input = publish_input();
+            input.content = content;
+            cases.push(("acme", "review", input));
+        }
+        for agents in [vec![], vec!["all"], vec!["claude"; 4], vec!["codex"; 2]] {
+            let mut input = publish_input();
+            input.agent_compatibility = agents.into_iter().map(str::to_string).collect();
+            cases.push(("acme", "review", input));
+        }
+        for scope in ["", "all"] {
+            let mut input = publish_input();
+            input.scope = scope.to_string();
+            cases.push(("acme", "review", input));
+        }
+        for (org, name, input) in cases {
+            let error = publish_command_version_with_client(
+                &client,
+                &server.base_url,
+                "fake-token",
+                org,
+                name,
+                input,
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                error.starts_with("Command version publish failed:"),
+                "{error}"
+            );
+            assert!(!error.contains("Network error"), "{error}");
+        }
+        assert!(server.finish().await.is_empty());
+    }
+
+    #[test]
+    fn publication_content_trimming_matches_javascript() {
+        let mut input = publish_input();
+        for content in [
+            format!("\u{feff}{}\u{feff}", "é".repeat(20_000)),
+            "\u{0085}".to_string(),
+        ] {
+            input.content = content;
+            assert!(validate_command_publication("acme", "review", &input).is_ok());
+        }
+        input.content = "\u{feff}".to_string();
+        assert!(validate_command_publication("acme", "review", &input).is_err());
+    }
+
+    #[tokio::test]
+    async fn publishes_raw_content_with_encoded_segments_and_explicit_metadata() {
+        let body = r#"{"version":{"id":"version-id","version":"1.2.3-beta.1+build.2","content":"Réviser 🦀.\nSecond line.","agentCompatibility":["claude","codex"],"scope":"org"}}"#;
+        let server = PublishServer::start(Some((201, body))).await;
+        let input = publish_input();
+        let version = publish_command_version_with_client(
+            &publish_client(),
+            &server.base_url,
+            "fake-token",
+            "team /é?#",
+            " /review/é?# ",
+            input.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(version.version, "1.2.3-beta.1+build.2");
+        assert_eq!(version.content, "Réviser 🦀.\nSecond line.");
+        assert_eq!(version.agent_compatibility, input.agent_compatibility);
+        assert_eq!(version.scope.as_deref(), Some("org"));
+        let requests = server.finish().await;
+        assert_eq!(requests.len(), 1);
+        let (headers, body) = requests[0].split_once("\r\n\r\n").unwrap();
+        assert_eq!(
+            headers.lines().next().unwrap(),
+            "POST /api/v1/orgs/team%20%2F%C3%A9%3F%23/commands/review%2F%C3%A9%3F%23/versions HTTP/1.1"
+        );
+        let headers = headers.to_ascii_lowercase();
+        assert!(headers.contains("authorization: bearer fake-token\r\n"));
+        assert!(headers.contains("content-type: application/json\r\n"));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(body).unwrap(),
+            serde_json::json!({
+                "version": "1.2.3-beta.1+build.2",
+                "content": input.content,
+                "agentCompatibility": ["claude", "codex"],
+                "scope": "org"
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn publication_http_errors_are_contextual_and_never_retried() {
+        for (status, message) in [
+            (307, "Temporary redirect"),
+            (308, "Permanent redirect"),
+            (400, "Invalid version"),
+            (401, "Not authenticated"),
+            (403, "Write scope required"),
+            (404, "Command not found"),
+            (409, "Version already exists"),
+            (500, "Server error"),
+        ] {
+            let body = serde_json::json!({"error": message}).to_string();
+            let server = PublishServer::start(Some((status, &body))).await;
+            let error = publish_command_version_with_client(
+                &publish_client(),
+                &server.base_url,
+                "fake-token",
+                "acme",
+                "review",
+                publish_input(),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(
+                error,
+                format!("Command version publish failed {status}: {message}")
+            );
+            assert_eq!(server.finish().await.len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn publication_invalid_response_is_distinct_from_network_failure() {
+        for body in ["not json", r#"{"version":{"version":"1.0.0"}}"#, "{}"] {
+            let server = PublishServer::start(Some((201, body))).await;
+            let error = publish_command_version_with_client(
+                &publish_client(),
+                &server.base_url,
+                "fake-token",
+                "acme",
+                "review",
+                publish_input(),
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                error.starts_with("Command version publish failed: Invalid response:"),
+                "{error}"
+            );
+            assert_eq!(server.finish().await.len(), 1);
+        }
+        let server = PublishServer::start(None).await;
+        let error = publish_command_version_with_client(
+            &publish_client(),
+            &server.base_url,
+            "fake-token",
+            "acme",
+            "review",
+            publish_input(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.starts_with("Command version publish failed: Network error:"),
+            "{error}"
+        );
+        assert_eq!(server.finish().await.len(), 1);
+    }
 
     fn sample_command() -> RegistryCommandDetail {
         RegistryCommandDetail {

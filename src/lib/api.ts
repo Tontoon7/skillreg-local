@@ -13,6 +13,7 @@ import type {
 	CommandInstallResult,
 	CommandRemoveResult,
 	CommandUpdateResult,
+	CommandVersion,
 	DeviceFlowResponse,
 	InstallResult,
 	InstalledCommandRecord,
@@ -32,6 +33,7 @@ import type {
 	PollResponse,
 	ProposalDetail,
 	ProposalSummary,
+	PublishCommandVersionInput,
 	PushResult,
 	RegistryCommand,
 	RegistryCommandDetail,
@@ -170,6 +172,12 @@ export const listCommands = (org: string) => invoke<RegistryCommand[]>("list_com
 
 export const getCommand = (org: string, name: string) =>
 	invoke<RegistryCommandDetail>("get_command", { org, name });
+
+export const publishCommandVersion = (
+	org: string,
+	name: string,
+	input: PublishCommandVersionInput,
+) => invoke<CommandVersion>("publish_command_version", { org, name, input });
 
 export const pullCommand = (params: {
 	org: string;
