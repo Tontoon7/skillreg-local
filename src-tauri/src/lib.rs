@@ -1,13 +1,32 @@
 mod commands;
+pub mod managed_skills;
 
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, Runtime, WindowEvent,
+    AppHandle, Manager, Runtime, WebviewWindowBuilder, WindowEvent,
 };
 
 fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
+    if app.get_webview_window("main").is_none() {
+        if let Some(config) = app
+            .config()
+            .app
+            .windows
+            .iter()
+            .find(|config| config.label == "main")
+            .cloned()
+        {
+            if let Err(error) =
+                WebviewWindowBuilder::from_config(app, &config).and_then(|builder| builder.build())
+            {
+                eprintln!("failed to recreate the main window: {error}");
+            }
+        } else {
+            eprintln!("failed to recreate the main window: configuration missing");
+        }
+    }
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
@@ -86,12 +105,14 @@ pub fn run() {
             commands::config::read_config,
             commands::config::write_config,
             commands::config::set_launch_at_login,
+            commands::config::set_auto_update_enabled,
             commands::auth::login_initiate,
             commands::auth::login_poll,
             commands::auth::login_with_token,
             commands::auth::whoami,
             commands::auth::logout,
             commands::auth::open_url,
+            commands::local::detect_agents,
             commands::local::scan_local_skills,
             commands::collaboration::propose_skill_change,
             commands::collaboration::list_skill_proposals,
@@ -103,6 +124,18 @@ pub fn run() {
             commands::skills::get_catalog_policy,
             commands::skills::list_catalog_skills,
             commands::skills::install_catalog_skill,
+            commands::managed_skills::install_managed_skill,
+            commands::managed_skills::detect_managed_agents,
+            commands::managed_skills::get_managed_overview,
+            commands::managed_skills::uninstall_managed_skill,
+            commands::managed_skills::repair_managed_skill,
+            commands::managed_skills::repair_all_managed_skills,
+            commands::managed_skills::switch_active_org,
+            commands::managed_migration::preview_managed_skills_migration,
+            commands::managed_migration::run_managed_skills_migration,
+            commands::managed_migration::repair_managed_skills,
+            commands::local_import::preview_local_skills_import,
+            commands::local_import::run_local_skills_import,
             commands::skills::push_skill,
             commands::skills::uninstall_skill,
             commands::skills::delete_skill,
@@ -117,6 +150,8 @@ pub fn run() {
             commands::installed_manifest::list_tracked_installations,
             commands::installed_manifest::set_skill_auto_update,
             commands::auto_update::run_auto_update_now,
+            commands::auto_update::check_managed_updates,
+            commands::auto_update::run_managed_updates_now,
             commands::env::get_env_vars,
             commands::env::get_org_env_var,
             commands::env::set_env_vars,

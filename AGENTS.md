@@ -9,7 +9,7 @@ Application de bureau SkillReg (Tauri 2, Rust et React) qui permet d'installer, 
 - Elle consomme la même API REST que la CLI (`https://app.skillreg.dev/api/v1`, contrat dans `skillreg-app/API-REFERENCE.md`) et partage ses fichiers de configuration locaux.
 - **Distribution** : releases GitHub de `Tontoon7/skillreg-local` pour macOS (arm64 et x64, signées et notarisées), Linux (`.deb`, `.rpm`, AppImage) et Windows ; mise à jour automatique par le plugin updater de Tauri ; page de téléchargement sur https://skillreg.dev/download.
 - **Docs de référence** : `DEV-PLAN.md` (architecture, commandes Rust, écrans, API), `ROADMAP.md` (avancement par phase), `docs/plans/2026-03-10-macos-notarization.md`, `docs/plans/2026-05-20-skillreg-env-engine-spec.md` (moteur de variables d'environnement par organisation).
-- **État** : phases 1 à 6 terminées (squelette, auth et dashboard, catalogue et installation, skills locales et publication, variables d'environnement et réglages, packaging signé et notarisé), puis moteur de variables par organisation, slash commands, mises à jour automatiques des skills, badges de validation et catalogue public. Les secrets de signature et de notarisation Apple sont configurés dans GitHub. Le reste à faire est dans `ROADMAP.md`.
+- **État** : phases 1 à 6 terminées (squelette, auth et dashboard, catalogue et installation, skills locales et publication, variables d'environnement et réglages, packaging signé et notarisé), puis moteur de variables par organisation, slash commands, mises à jour automatiques des skills, badges de validation et catalogue public, puis Phase 7 lot A (skills gérées : copie canonique unique sous `~/.skillreg/skills`, manifeste v2, liens gérés vers Claude, Codex et Cursor, préparation automatique, import des skills locales ; QA runtime Windows et Linux, signature et downgrade restent des gates NO-GO de `docs/plans/2026-07-29-managed-skills-release-checklist.md`). Les secrets de signature et de notarisation Apple sont configurés dans GitHub. Le reste à faire est dans `ROADMAP.md`.
 
 ## Carte du code
 
@@ -29,7 +29,9 @@ Stack : Tauri v2, Rust (reqwest, serde, sha2, tar, flate2, dirs, open, keyring-c
 | `src-tauri/src/commands/api_error.rs` | Mise en forme des erreurs d'API (limites de plan, paiement) |
 | `src-tauri/tauri.conf.json`, `capabilities/`, `icons/` | Configuration Tauri (identifiant `com.skillreg.local`, updater), permissions, icônes |
 | `src-tauri/gen/schemas/` | Schémas générés par Tauri : ne pas éditer à la main |
-| `src-tauri/tests/tray_config.rs` | Test d'intégration Rust sur `tauri.conf.json` |
+| `src-tauri/src/managed_skills/` | Skills gérées : manifeste v2 (`manifest.rs`), chemins canoniques (`paths.rs`), adaptateurs d'agents (`agents/`, matrice dans `docs/agent-compatibility.md`), liens symlink/junction (`bindings.rs`, `platform_links.rs`), installation transactionnelle (`service.rs`, `archive.rs`), migration legacy (`migration.rs`), changement d'organisation (`reconcile.rs`), import local (`local_import.rs`) |
+| `src-tauri/src/commands/managed_skills.rs`, `managed_migration.rs`, `local_import.rs` | Commandes Tauri des skills gérées, de la migration legacy et de l'import des skills locales |
+| `src-tauri/tests/` | Tests d'intégration Rust : `tauri.conf.json` (tray), installation, bindings, migration, désinstallation, changement d'organisation et import local des skills gérées ; helpers dans `support/` |
 | `src/App.tsx`, `src/main.tsx` | Routes, garde d'authentification, route de setup ; point d'entrée et restauration du thème |
 | `src/pages/` | Login, Setup, Dashboard, Catalog, PublicCatalog, SkillDetail, Commands, Installed, EnvVars, Settings |
 | `src/components/` | Dialogues (publication, proposition, suppression, variables), `UpdateChecker`, `ValidationBadge`, `layout/` (AppShell, Sidebar, Titlebar), `ui/` |
@@ -39,6 +41,7 @@ Stack : Tauri v2, Rust (reqwest, serde, sha2, tar, flate2, dirs, open, keyring-c
 | `src/lib/*.ts` (autres) | Logique sans IPC : inventaire des variables (`env-inventory.ts`), regroupement des skills installées (`installed-skill-groups.ts`), préremplissage et validation de publication de commandes (`command-publishing.ts`), testés dans `tests/` ; actions locales, notifications, couleurs de tags, `cn()` |
 | `src/styles/globals.css` | Base Tailwind, variables des thèmes sombre et clair, prose |
 | `tests/*.test.ts` | Tests `node:test` de la logique de `src/lib` |
+| `src/**/__tests__/`, `src/test/`, `vitest.config.ts` | Tests Vitest et Testing Library des pages, composants et stores ; `src/test/setup.ts` simule `invoke()` (`mockInvokeCommand`) |
 | `scripts/check-release-notarization.sh` | Garde-fou : vérifie que `release.yml` notarise toujours les DMG |
 
 ## Commandes
@@ -55,14 +58,16 @@ pnpm tauri:build:local           # packaging local non signé, sans artefacts d'
 cargo check --manifest-path src-tauri/Cargo.toml             # compilation Rust sans lancer l'app
 cargo test --manifest-path src-tauri/Cargo.toml              # tests Rust (unitaires et src-tauri/tests)
 cargo test --manifest-path src-tauri/Cargo.toml <nom>        # tests Rust dont le nom contient <nom>
-pnpm test                                                    # tests TypeScript (node --test sur tests/*.test.ts)
+pnpm test                                                    # tests TypeScript : node --test sur tests/*.test.ts, puis Vitest
+pnpm test:node                                               # node --test seul
+pnpm test:frontend                                           # Vitest seul (src/**/__tests__)
 node --test --experimental-strip-types tests/env-inventory.test.ts   # un fichier
 bash scripts/check-release-notarization.sh                   # après une modification de release.yml (requiert rg)
 ```
 
 **Validation de l'usine** (commande `check` de la configuration active) : `pnpm format:check && pnpm build`.
 
-Elle ne couvre ni le Rust ni les tests TypeScript. Si tu modifies `src-tauri/`, lance aussi `cargo test --manifest-path src-tauri/Cargo.toml` après `pnpm build` (qui produit `dist/`, référencé par `tauri.conf.json`) ; si tu modifies `src/lib/` ou `tests/`, lance `pnpm test`. Signale dans ta conclusion ce que tu as lancé.
+Elle ne couvre ni le Rust ni les tests TypeScript. Si tu modifies `src-tauri/`, lance aussi `cargo test --manifest-path src-tauri/Cargo.toml` après `pnpm build` (qui produit `dist/`, référencé par `tauri.conf.json`) ; si tu modifies `src/` ou `tests/`, lance `pnpm test`. Signale dans ta conclusion ce que tu as lancé.
 
 Dans l'usine, ne lance jamais `pnpm tauri dev`, `pnpm dev` ou `pnpm tauri build` : les deux premiers ne s'arrêtent pas, le troisième est un packaging lourd qui n'est pas demandé.
 
@@ -76,17 +81,18 @@ Dans l'usine, ne lance jamais `pnpm tauri dev`, `pnpm dev` ou `pnpm tauri build`
 - **Publication des commandes** : `publishCommandVersion()` → `publish_command_version` → POST `/api/v1/orgs/{org}/commands/{name}/versions`, avec `version`, `content`, `agentCompatibility` et `scope` explicites, réponse `{ version }`. L'API exige le scope de jeton `write` ou `admin` ; ne pas déduire cette autorisation du rôle d'organisation. Le dialogue reste lié à l'organisation et au nom d'origine, sans retry automatique ni modification des installations locales ; créer une nouvelle commande reste hors de ce parcours.
 - Pages dans `src/pages/`, composants réutilisables dans `src/components/`, stores dans `src/lib/store.ts`, wrappers IPC dans `src/lib/api.ts`. Les pages lisent directement les stores (`useAuthStore` : authentification, utilisateur, organisations ; `useConfigStore` : organisation, agent, portée, `setupDone`), sans prop drilling.
 - **Auth** : device flow recommandé (`login_initiate` → POST `/api/v1/auth/cli/initiate`, `open_url`, affichage du `userCode`, `login_poll` toutes les 3 s jusqu'à `status: "complete"`) ou collage d'un token `sr_live_*`, `sr_test_*` ou `sk_*` (`login_with_token` vérifie le format puis appelle `whoami`). Le token est enregistré dans `~/.skillreg/config.json`.
-- **Setup** : après la première connexion, si `setupDone` est faux, redirection vers `/setup` (organisation, agent par défaut claude/codex/cursor, portée par défaut project/user).
+- **Setup** : après la première connexion, si `setupDone` est faux, redirection vers `/setup`, qui choisit l'organisation (automatiquement s'il n'y en a qu'une), détecte les assistants et propose la migration des installations legacy, sans demander d'agent, de portée, de chemin ni de version. Sans organisation, il propose de créer un workspace dans le navigateur puis d'actualiser.
 - **Thème** : sombre par défaut, bascule dans Settings, persisté dans `localStorage` (`skillreg-theme`), variables CSS dans `src/styles/globals.css` (classe `.light` sur `<html>`).
-- **Interopérabilité avec la CLI** : mêmes fichiers (`~/.skillreg/config.json`, `.skillregrc`, `~/.skillreg/env/`), mêmes chemins d'installation (projet : `.claude/skills/`, `.codex/skills/`, `.cursor/skills/` ; utilisateur : les mêmes sous `~/`). Un changement de contrat d'API se coordonne avec `skillreg-app` (routes, CLI, `API-REFERENCE.md`).
-- **TDD** pour la logique (installation, archives, variables, parsing, packaging, commandes Rust) : test Rust dans un module `#[cfg(test)]` ou `src-tauri/tests/`, test TypeScript dans `tests/`. Un test ne touche ni le vrai `~/.skillreg` ni le trousseau du système : dossier temporaire et `MemoryCredentialBackend`, comme les tests existants de `env.rs` et `installed_manifest.rs`.
+- **Interopérabilité avec la CLI** : mêmes fichiers (`~/.skillreg/config.json`, `.skillregrc`, `~/.skillreg/env/`), mêmes chemins d'installation projet (`.claude/skills/`, `.codex/skills/`, `.cursor/skills/`). En portée utilisateur, le desktop garde une copie canonique sous `~/.skillreg/skills` et crée des liens gérés dans les dossiers des agents ; la CLI lit le manifeste v2 en lecture seule et renvoie les installations user-scope de skills gérées vers le desktop. Un changement de contrat d'API se coordonne avec `skillreg-app` (routes, CLI, `API-REFERENCE.md`).
+- **TDD** pour la logique (installation, archives, variables, parsing, packaging, commandes Rust) : test Rust dans un module `#[cfg(test)]` ou `src-tauri/tests/`, test TypeScript dans `tests/` (logique pure) ou Vitest dans `src/**/__tests__/` (pages et composants). Un test ne touche ni le vrai `~/.skillreg` ni le trousseau du système : dossier temporaire et `MemoryCredentialBackend`, comme les tests existants de `env.rs` et `installed_manifest.rs`.
 - UI : garder l'esthétique sombre d'outil développeur et les composants existants.
 - **Secrets** : ne jamais copier de valeur de `.env`, de `.claude/settings.local.json`, de clé de signature Tauri ou d'identifiant Apple dans le code, les tests ou la doc.
 - `ROADMAP.md` : ne le modifie que si le ticket le demande (voir « Sessions avec Axel »).
 
 ## Livraison
 
-- Branche cible : `main`. Aucune CI ne tourne sur les PR ni sur `main`.
+- Branche cible : `main`.
+- CI (`.github/workflows/ci.yml`) sur chaque PR et sur `main` : sous Linux, `pnpm format:check`, `pnpm test`, `pnpm build`, `cargo test` et `cargo check` ; sous macOS et Windows, `cargo test` et `cargo check`.
 - Release (`.github/workflows/release.yml`) : sur un tag `v*`, build Tauri pour macOS arm64 et x64 (signature Developer ID, notarisation et agrafage des DMG), Linux et Windows, puis création d'une release GitHub **en brouillon** avec les installeurs et `latest.json` pour l'updater. Axel publie ensuite le brouillon. Un build complet peut durer plus de deux heures.
 - Une release commence par un commit `chore: release x.y.z` qui change la version dans `package.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock` et `src-tauri/tauri.conf.json`, puis le tag `vx.y.z`. Ni tag ni bump de version sans demande d'Axel.
 - Politique de l'usine pour ce dépôt : livraison `review`. L'usine ouvre une PR et la laisse en « À valider » ; Axel fusionne et publie une release manuellement.
@@ -109,7 +115,7 @@ Les tickets de ce dépôt sont exécutés par l'usine de développement d'Axel (
 ## Pièges connus
 
 - La validation de l'usine ne compile pas le Rust : `pnpm build` ne type que `src/` (`tsconfig.json`, `include: ["src"]`) ; ni `src-tauri/` ni `tests/` ne sont vérifiés.
-- Les tests `tests/*.test.ts` (`pnpm test`) ne sont lancés par aucune CI ni par la validation de l'usine ; `tsc` ne les type pas.
+- Les tests (`pnpm test`) ne sont pas lancés par la validation de l'usine, seulement par la CI ; `tsc` type `src/**/__tests__/` mais pas `tests/`.
 - `cargo check` et `cargo test` compilent `tauri.conf.json`, qui référence `../dist` : lance `pnpm build` avant dans un worktree neuf. Le premier build Rust d'un worktree est long (dépendances Tauri complètes).
 - `src-tauri/src/commands/skills.rs` n'est pas au format rustfmt : `cargo fmt` sur tout le crate reformate du code sans rapport avec le ticket. Formate seulement tes fichiers (`rustfmt --edition 2021 <fichier>`).
 - L'URL de l'API `https://app.skillreg.dev` est codée en dur dans `src-tauri/src/commands/auth.rs`, `skills.rs`, `collaboration.rs` et `src/lib/constants.ts` : un changement doit toucher les quatre.

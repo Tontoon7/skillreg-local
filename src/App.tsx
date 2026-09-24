@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { Navigate, Route, Routes } from "react-router";
 import { AppShell } from "./components/layout/AppShell";
 import { useAuthStore, useConfigStore } from "./lib/store";
+import type { SkillregConfig, WhoamiResponse } from "./lib/types";
 import { Catalog } from "./pages/Catalog";
 import { Commands } from "./pages/Commands";
 import { Dashboard } from "./pages/Dashboard";
@@ -15,7 +16,7 @@ import { Setup } from "./pages/Setup";
 import { SkillDetailPage } from "./pages/SkillDetail";
 
 function AuthGate({ children }: { children: React.ReactNode }) {
-	const { authenticated, loading } = useAuthStore();
+	const { authenticated, loading, user } = useAuthStore();
 	const { config, loading: configLoading } = useConfigStore();
 
 	if (loading || configLoading) {
@@ -30,7 +31,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 		return <Navigate to="/login" replace />;
 	}
 
-	if (!config.setupDone) {
+	if (!user || requiresWorkspaceSetup(config, user)) {
 		return <Navigate to="/setup" replace />;
 	}
 
@@ -73,16 +74,25 @@ export function App() {
 
 function LoginRoute() {
 	const authenticated = useAuthStore((s) => s.authenticated);
-	const setupDone = useConfigStore((s) => s.config.setupDone);
-	if (authenticated && setupDone) return <Navigate to="/" replace />;
-	if (authenticated && !setupDone) return <Navigate to="/setup" replace />;
+	const user = useAuthStore((s) => s.user);
+	const config = useConfigStore((s) => s.config);
+	if (authenticated && user && !requiresWorkspaceSetup(config, user)) {
+		return <Navigate to="/" replace />;
+	}
+	if (authenticated) return <Navigate to="/setup" replace />;
 	return <Login />;
 }
 
 function SetupRoute() {
 	const authenticated = useAuthStore((s) => s.authenticated);
-	const setupDone = useConfigStore((s) => s.config.setupDone);
+	const user = useAuthStore((s) => s.user);
+	const config = useConfigStore((s) => s.config);
 	if (!authenticated) return <Navigate to="/login" replace />;
-	if (setupDone) return <Navigate to="/" replace />;
+	if (user && !requiresWorkspaceSetup(config, user)) return <Navigate to="/" replace />;
 	return <Setup />;
+}
+
+export function requiresWorkspaceSetup(config: SkillregConfig, user: WhoamiResponse): boolean {
+	if (!config.setupDone || !config.org) return true;
+	return !user.orgs.some((organization) => organization.slug === config.org);
 }

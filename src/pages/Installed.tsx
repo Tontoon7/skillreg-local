@@ -1,951 +1,407 @@
-import { ProposeDialog } from "@/components/ProposeDialog";
-import { PublishDialog } from "@/components/PublishDialog";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { AgentAvailability } from "@/components/skills/AgentAvailability";
+import {
+	SkillPrimaryAction,
+	type SkillPrimaryActionKind,
+} from "@/components/skills/SkillPrimaryAction";
+import { UninstallManagedSkillDialog } from "@/components/skills/UninstallManagedSkillDialog";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-	listOrgEnvVars,
-	listSkillProposals,
-	listSkills,
-	listTrackedInstallations,
-	previewLegacyEnvMigration,
-	pullSkill,
-	scanLocalSkills,
-	setSkillAutoUpdate,
-	uninstallSkill,
-} from "@/lib/api";
-import {
-	type EnvMigrationSummary,
-	type EnvReadinessSummary,
-	type OrgEnvVariable,
-	buildEnvInventory,
-	getEnvStatusForSkills,
-} from "@/lib/env-inventory";
-import { type InstalledSkillGroup, groupInstalledSkills } from "@/lib/installed-skill-groups";
-import {
-	type RegistrySkillLookup,
-	createRegistrySkillLookup,
-	getLocalSkillAction,
-	getRegistrySkillForLocal,
-} from "@/lib/local-skill-actions";
-import { notify } from "@/lib/notifications";
-import { useConfigStore } from "@/lib/store";
-import { tagStyle } from "@/lib/tag-colors";
-import type {
-	LocalSkill,
-	ProposalSummary,
-	RegistrySkill,
-	SyncStatus,
-	TrackedInstallation,
-	UpdateInfo,
-} from "@/lib/types";
+import type { EmployeeSkillRow } from "@/lib/employee-model";
+import { useManagedSkillsStore } from "@/lib/store";
+import type { ManagedOverviewInstallation } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
-	AlertCircle,
-	ArrowUpCircle,
-	Check,
-	CircleDot,
-	Clock,
+	AlertTriangle,
 	FolderOpen,
-	HardDrive,
-	Key,
 	Loader2,
+	MoreHorizontal,
+	PackageOpen,
 	RefreshCw,
 	Search,
-	Send,
-	Trash2,
-	Upload,
-	X,
+	ShieldCheck,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router";
 
-function timeAgo(value: string): string {
-	const now = Date.now();
-	const then = /^\d+$/.test(value) ? Number(value) * 1000 : new Date(value).getTime();
-	const diff = now - then;
-	const minutes = Math.floor(diff / 60000);
-	if (minutes < 1) return "just now";
-	if (minutes < 60) return `${minutes}m ago`;
-	const hours = Math.floor(minutes / 60);
-	if (hours < 24) return `${hours}h ago`;
-	const days = Math.floor(hours / 24);
-	if (days < 30) return `${days}d ago`;
-	const months = Math.floor(days / 30);
-	if (months < 12) return `${months}mo ago`;
-	const years = Math.floor(days / 365);
-	return `${years}y ago`;
-}
-
-type AgentFilter = "claude" | "codex" | "cursor";
-type ScopeFilter = "project" | "user";
-type InstalledSyncStatus = SyncStatus | "checking";
-type TrackedInstallationLookup = {
-	byPath: Record<string, TrackedInstallation>;
-	byKey: Record<string, TrackedInstallation>;
-};
-
-const AGENTS: AgentFilter[] = ["claude", "codex", "cursor"];
-const SCOPES: ScopeFilter[] = ["project", "user"];
-const REGISTRY_PAGE_SIZE = 200;
-
-async function loadAllRegistrySkills(org: string): Promise<RegistrySkill[]> {
-	const firstPage = await listSkills({ org, page: 1, limit: REGISTRY_PAGE_SIZE });
-	const remainingPages = Math.max(0, firstPage.pagination.totalPages - 1);
-	if (remainingPages === 0) return firstPage.skills;
-
-	const rest = await Promise.allSettled(
-		Array.from({ length: remainingPages }, (_, index) =>
-			listSkills({ org, page: index + 2, limit: REGISTRY_PAGE_SIZE }),
-		),
-	);
-
-	return [
-		...firstPage.skills,
-		...rest.flatMap((page) => (page.status === "fulfilled" ? page.value.skills : [])),
-	];
-}
-
-function getUpdatesFromRegistry(
-	skills: LocalSkill[],
-	registrySkills: RegistrySkillLookup,
-): UpdateInfo[] {
-	return skills.flatMap((skill) => {
-		const registrySkill = getRegistrySkillForLocal(skill, registrySkills);
-		const serverVersion = registrySkill?.latestVersion;
-
-		if (!serverVersion || skill.version === "-" || serverVersion === skill.version) {
-			return [];
-		}
-
-		return [
-			{
-				name: skill.name,
-				localVersion: skill.version,
-				serverVersion,
-				agent: skill.agent,
-				scope: skill.scope,
-			},
-		];
-	});
-}
-
-function getSyncStatus(
-	skill: LocalSkill,
-	updates: UpdateInfo[],
-	registryLoading: boolean,
-	trackedLookup: TrackedInstallationLookup,
-): InstalledSyncStatus {
-	if (registryLoading) return "checking";
-
-	const tracked = getTrackedInstallation(skill, trackedLookup);
-	if (!tracked) return "local_only";
-	if (tracked.contentHash !== skill.content_hash) return "managed_modified_locally";
-	if (tracked.autoUpdateEnabled === false) return "managed_auto_update_disabled";
-
-	const hasUpdate = updates.some(
-		(u) => u.name === skill.name && u.agent === skill.agent && u.scope === skill.scope,
-	);
-	if (hasUpdate) return "managed_update_available";
-
-	return "managed_synced";
-}
-
-function StatusBadge({ status, update }: { status: InstalledSyncStatus; update?: UpdateInfo }) {
-	switch (status) {
-		case "checking":
-			return (
-				<span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground border border-border">
-					<Loader2 className="size-3 animate-spin" />
-					Checking
-				</span>
-			);
-		case "managed_synced":
-			return (
-				<span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400 border border-emerald-500/20">
-					<Check className="size-3" />
-					Up to date
-				</span>
-			);
-		case "managed_update_available":
-			return (
-				<span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-400 border border-amber-500/20">
-					<ArrowUpCircle className="size-3" />
-					{update ? `${update.localVersion} → ${update.serverVersion}` : "Update"}
-				</span>
-			);
-		case "managed_modified_locally":
-			return (
-				<span className="inline-flex items-center gap-1 rounded-full bg-orange-500/10 px-2 py-0.5 text-[11px] font-medium text-orange-400 border border-orange-500/20">
-					<AlertCircle className="size-3" />
-					Modified locally
-				</span>
-			);
-		case "managed_auto_update_disabled":
-			return (
-				<span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground border border-border">
-					<RefreshCw className="size-3" />
-					Auto-update off
-				</span>
-			);
-		case "local_only":
-			return (
-				<span className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-400 border border-blue-500/20">
-					<HardDrive className="size-3" />
-					Local only
-				</span>
-			);
-		default:
-			return null;
-	}
-}
-
-function EnvStatusBadge({ summary }: { summary: EnvReadinessSummary }) {
-	switch (summary.status) {
-		case "ready":
-			return (
-				<span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400 border border-emerald-500/20">
-					<Check className="size-3" />
-					Env ready
-				</span>
-			);
-		case "missing":
-			return (
-				<span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-400 border border-amber-500/20">
-					<AlertCircle className="size-3" />
-					Env missing{summary.missingCount > 0 ? `: ${summary.missingCount}` : ""}
-				</span>
-			);
-		case "optional":
-			return (
-				<span className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-400 border border-blue-500/20">
-					<Key className="size-3" />
-					Env optional
-				</span>
-			);
-		case "not_required":
-			return (
-				<span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground border border-border">
-					<Key className="size-3" />
-					Env not required
-				</span>
-			);
-		default:
-			return null;
-	}
-}
-
-function getInstallKey(skill: LocalSkill): string {
-	return `${skill.agent}:${skill.scope}:${skill.name}`;
-}
-
-function createTrackedInstallationLookup(
-	installations: TrackedInstallation[],
-): TrackedInstallationLookup {
-	return installations.reduce<TrackedInstallationLookup>(
-		(lookup, installation) => {
-			lookup.byPath[installation.installPath] = installation;
-			lookup.byKey[`${installation.agent}:${installation.scope}:${installation.name}`] =
-				installation;
-			return lookup;
-		},
-		{ byPath: {}, byKey: {} },
-	);
-}
-
-function getTrackedInstallation(
-	skill: LocalSkill,
-	lookup: TrackedInstallationLookup,
-): TrackedInstallation | undefined {
-	return lookup.byPath[skill.path] ?? lookup.byKey[getInstallKey(skill)];
-}
-
-function getVersionLabel(group: InstalledSkillGroup): string {
-	const versions = [...new Set(group.installations.map((skill) => skill.version))];
-	if (versions.length === 1) return versions[0] ?? "-";
-	return `${versions.length} versions`;
-}
+type InstalledAction = "update" | "repair" | "uninstall";
 
 export function Installed() {
-	const org = useConfigStore((s) => s.config.org);
-	const [skills, setSkills] = useState<LocalSkill[]>([]);
-	const [updates, setUpdates] = useState<UpdateInfo[]>([]);
-	const [trackedInstallations, setTrackedInstallations] = useState<TrackedInstallation[]>([]);
-	const [orgEnvVars, setOrgEnvVars] = useState<OrgEnvVariable[]>([]);
-	const [migrationSummary, setMigrationSummary] = useState<EnvMigrationSummary | null>(null);
-	const [registrySkills, setRegistrySkills] = useState<RegistrySkillLookup>({});
-	const [recentProposals, setRecentProposals] = useState<Record<string, ProposalSummary[]>>({});
-	const [loading, setLoading] = useState(true);
-	const [registryLoading, setRegistryLoading] = useState(false);
-	const [error, setError] = useState<string | null>(null);
-	const [actionLoading, setActionLoading] = useState<string | null>(null);
-	const [publishSkill, setPublishSkill] = useState<LocalSkill | null>(null);
-	const [proposeSkill, setProposeSkill] = useState<LocalSkill | null>(null);
-
-	const [search, setSearch] = useState("");
-	const [debouncedSearch, setDebouncedSearch] = useState("");
-	const [selectedAgents, setSelectedAgents] = useState<AgentFilter[]>([]);
-	const [selectedScopes, setSelectedScopes] = useState<ScopeFilter[]>([]);
-
-	const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-	const registryRequestRef = useRef(0);
-
-	const loadRegistryMetadata = useCallback(
-		async (localSkills: LocalSkill[]) => {
-			const requestId = ++registryRequestRef.current;
-
-			if (!org) {
-				setUpdates([]);
-				setRegistrySkills({});
-				setRecentProposals({});
-				setRegistryLoading(false);
-				return;
-			}
-
-			setRegistryLoading(true);
-			setUpdates([]);
-			setRegistrySkills({});
-			setRecentProposals({});
-
-			let registryLookup: RegistrySkillLookup = {};
-			try {
-				const catalogSkills = await loadAllRegistrySkills(org);
-				if (registryRequestRef.current !== requestId) return;
-
-				registryLookup = createRegistrySkillLookup(catalogSkills);
-				setRegistrySkills(registryLookup);
-				setUpdates(getUpdatesFromRegistry(localSkills, registryLookup));
-			} catch (e) {
-				if (registryRequestRef.current !== requestId) return;
-				console.warn("Failed to load registry metadata for installed skills", e);
-				return;
-			} finally {
-				if (registryRequestRef.current === requestId) {
-					setRegistryLoading(false);
-				}
-			}
-
-			const proposalResults = await Promise.allSettled(
-				localSkills
-					.filter((skill) => getLocalSkillAction(skill, registryLookup) === "propose")
-					.map(async (skill) => ({
-						skillName: skill.name,
-						proposals: await listSkillProposals(org, skill.name),
-					})),
-			);
-			if (registryRequestRef.current !== requestId) return;
-
-			const nextProposals: Record<string, ProposalSummary[]> = {};
-			for (const item of proposalResults) {
-				if (item.status === "fulfilled") {
-					nextProposals[item.value.skillName] = item.value.proposals.slice(0, 3);
-				}
-			}
-			setRecentProposals(nextProposals);
-		},
-		[org],
-	);
-
-	const load = useCallback(async () => {
-		registryRequestRef.current += 1;
-		setLoading(true);
-		setRegistryLoading(false);
-		setError(null);
-		try {
-			const [result, tracked, orgVars, migration] = await Promise.all([
-				scanLocalSkills(),
-				listTrackedInstallations().catch(() => []),
-				org ? listOrgEnvVars(org).catch(() => []) : Promise.resolve([]),
-				org ? previewLegacyEnvMigration(org).catch(() => null) : Promise.resolve(null),
-			]);
-			setSkills(result);
-			setTrackedInstallations(tracked);
-			setOrgEnvVars(orgVars);
-			setMigrationSummary(migration);
-			setLoading(false);
-			void loadRegistryMetadata(result);
-		} catch (e) {
-			setError(typeof e === "string" ? e : "Failed to scan local skills");
-			setLoading(false);
-		}
-	}, [loadRegistryMetadata, org]);
+	const model = useManagedSkillsStore((state) => state.model);
+	const overview = useManagedSkillsStore((state) => state.overview);
+	const loading = useManagedSkillsStore((state) => state.loading);
+	const refreshing = useManagedSkillsStore((state) => state.refreshing);
+	const error = useManagedSkillsStore((state) => state.error);
+	const refresh = useManagedSkillsStore((state) => state.refresh);
+	const updateNow = useManagedSkillsStore((state) => state.updateNow);
+	const repair = useManagedSkillsStore((state) => state.repair);
+	const uninstall = useManagedSkillsStore((state) => state.uninstall);
+	const [searchParams] = useSearchParams();
+	const [query, setQuery] = useState("");
+	const [expandedSkill, setExpandedSkill] = useState<string | null>(searchParams.get("skill"));
+	const [openMenu, setOpenMenu] = useState<string | null>(null);
+	const [pendingUninstall, setPendingUninstall] = useState<EmployeeSkillRow | null>(null);
+	const [busy, setBusy] = useState<InstalledAction | null>(null);
+	const [actionError, setActionError] = useState<string | null>(null);
 
 	useEffect(() => {
-		load();
-	}, [load]);
-
-	const handleSearch = (value: string) => {
-		setSearch(value);
-		clearTimeout(debounceRef.current);
-		debounceRef.current = setTimeout(() => setDebouncedSearch(value), 200);
-	};
-
-	const toggleAgent = (agent: AgentFilter) => {
-		setSelectedAgents((prev) =>
-			prev.includes(agent) ? prev.filter((a) => a !== agent) : [...prev, agent],
-		);
-	};
-
-	const toggleScope = (scope: ScopeFilter) => {
-		setSelectedScopes((prev) =>
-			prev.includes(scope) ? prev.filter((s) => s !== scope) : [...prev, scope],
-		);
-	};
+		void refresh();
+	}, [refresh]);
 
 	const filteredSkills = useMemo(() => {
-		let result = skills;
-
-		if (debouncedSearch) {
-			const q = debouncedSearch.toLowerCase();
-			result = result.filter(
-				(s) =>
-					s.name.toLowerCase().includes(q) ||
-					s.description.toLowerCase().includes(q) ||
-					s.tags.some((t) => t.toLowerCase().includes(q)),
-			);
-		}
-
-		if (selectedAgents.length > 0) {
-			result = result.filter((s) => selectedAgents.includes(s.agent as AgentFilter));
-		}
-
-		if (selectedScopes.length > 0) {
-			result = result.filter((s) => selectedScopes.includes(s.scope as ScopeFilter));
-		}
-
-		return [...result].sort((a, b) => a.name.localeCompare(b.name));
-	}, [skills, debouncedSearch, selectedAgents, selectedScopes]);
-
-	const groupedSkills = useMemo(() => groupInstalledSkills(filteredSkills), [filteredSkills]);
-	const totalSkillGroups = useMemo(() => groupInstalledSkills(skills).length, [skills]);
-	const trackedLookup = useMemo(
-		() => createTrackedInstallationLookup(trackedInstallations),
-		[trackedInstallations],
-	);
-	const envInventory = useMemo(() => {
-		if (!org) return null;
-		return buildEnvInventory({
-			org,
-			installedSkills: skills,
-			orgEnvVars,
-			legacyVariables: migrationSummary?.legacyVariables ?? [],
-		});
-	}, [org, skills, orgEnvVars, migrationSummary]);
-
-	const stats = useMemo(() => {
-		const updateCount = registryLoading ? 0 : updates.length;
-		const localOnly = registryLoading
-			? 0
-			: groupInstalledSkills(
-					skills.filter((skill) => !getTrackedInstallation(skill, trackedLookup)),
-				).length;
-		return { total: totalSkillGroups, installations: skills.length, updateCount, localOnly };
-	}, [skills, updates, trackedLookup, registryLoading, totalSkillGroups]);
-
-	const presentAgents = useMemo(
-		() => AGENTS.filter((a) => skills.some((s) => s.agent === a)),
-		[skills],
-	);
-	const presentScopes = useMemo(
-		() => SCOPES.filter((sc) => skills.some((s) => s.scope === sc)),
-		[skills],
-	);
-
-	const hasActiveFilters =
-		debouncedSearch || selectedAgents.length > 0 || selectedScopes.length > 0;
-
-	const handleUninstall = async (skill: LocalSkill) => {
-		const key = getInstallKey(skill);
-		const tracked = getTrackedInstallation(skill, trackedLookup);
-		setActionLoading(key);
-		try {
-			await uninstallSkill(skill.name, skill.agent, skill.scope, tracked?.projectDir ?? undefined);
-			setSkills((prev) =>
-				prev.filter(
-					(s) => !(s.name === skill.name && s.agent === skill.agent && s.scope === skill.scope),
-				),
-			);
-			setTrackedInstallations((prev) =>
-				prev.filter((installation) => installation.installPath !== skill.path),
-			);
-			notify("Skill uninstalled", skill.name);
-		} catch (e) {
-			notify("Operation failed", typeof e === "string" ? e : "Uninstall failed");
-		} finally {
-			setActionLoading(null);
-		}
-	};
-
-	const handleUpdate = async (skill: LocalSkill, update: UpdateInfo) => {
-		if (!org) return;
-		const key = `${update.agent}:${update.scope}:${update.name}`;
-		const tracked = getTrackedInstallation(skill, trackedLookup);
-		setActionLoading(key);
-		try {
-			await pullSkill({
-				org,
-				name: update.name,
-				version: update.serverVersion,
-				agent: update.agent,
-				scope: update.scope,
-				projectDir: tracked?.projectDir ?? undefined,
-			});
-			setUpdates((prev) => prev.filter((u) => u.name !== update.name));
-			await load();
-			notify("Skill updated", `${update.name} v${update.serverVersion}`);
-		} catch (e) {
-			notify("Operation failed", typeof e === "string" ? e : "Update failed");
-		} finally {
-			setActionLoading(null);
-		}
-	};
-
-	const getUpdate = (skill: LocalSkill) =>
-		updates.find(
-			(u) => u.name === skill.name && u.agent === skill.agent && u.scope === skill.scope,
-		);
-
-	const handleToggleAutoUpdate = async (skill: LocalSkill, enabled: boolean) => {
-		const tracked = getTrackedInstallation(skill, trackedLookup);
-		if (!tracked) return;
-
-		const key = getInstallKey(skill);
-		setActionLoading(key);
-		try {
-			await setSkillAutoUpdate({
-				org: tracked.org,
-				name: tracked.name,
-				agent: tracked.agent,
-				scope: tracked.scope,
-				projectDir: tracked.projectDir,
-				enabled,
-			});
-			setTrackedInstallations((prev) =>
-				prev.map((installation) =>
-					installation.installPath === tracked.installPath
-						? { ...installation, autoUpdateEnabled: enabled }
-						: installation,
-				),
-			);
-		} catch (e) {
-			notify("Operation failed", typeof e === "string" ? e : "Auto-update setting failed");
-		} finally {
-			setActionLoading(null);
-		}
-	};
-
-	const getProposalTone = (status: ProposalSummary["status"]) => {
-		switch (status) {
-			case "published":
-				return "text-emerald-400 border-emerald-500/20 bg-emerald-500/10";
-			case "rejected":
-				return "text-red-400 border-red-500/20 bg-red-500/10";
-			case "selected":
-				return "text-sky-400 border-sky-500/20 bg-sky-500/10";
-			case "needs_update":
-				return "text-amber-400 border-amber-500/20 bg-amber-500/10";
-			default:
-				return "text-muted-foreground border-border bg-muted/40";
-		}
-	};
-
-	if (loading) {
+		const normalized = query.trim().toLocaleLowerCase("fr");
+		if (!normalized) return model?.skills ?? [];
 		return (
-			<div className="flex items-center justify-center h-full">
-				<Loader2 className="size-6 animate-spin text-muted-foreground" />
-			</div>
+			model?.skills.filter((skill) => skill.name.toLocaleLowerCase("fr").includes(normalized)) ?? []
 		);
+	}, [model?.skills, query]);
+
+	const handleUpdate = async () => {
+		setBusy("update");
+		setActionError(null);
+		try {
+			await updateNow();
+		} catch {
+			setActionError("La mise à jour n’a pas pu être appliquée.");
+		} finally {
+			setBusy(null);
+		}
+	};
+
+	const handleRepair = async (installationId: string) => {
+		setBusy("repair");
+		setActionError(null);
+		try {
+			await repair(installationId);
+		} catch {
+			setActionError("La réparation n’a pas pu aboutir.");
+		} finally {
+			setBusy(null);
+		}
+	};
+
+	const handleUninstall = async () => {
+		if (!pendingUninstall) return;
+		const skill = pendingUninstall;
+		setBusy("uninstall");
+		setActionError(null);
+		try {
+			const result = await uninstall(skill.installationId);
+			if (!result.removed && !result.alreadyRemoved) {
+				setActionError(
+					result.conflicts > 0
+						? `${skill.name} n’a pas été désinstallée car une connexion locale a été modifiée. Aucun fichier n’a été supprimé.`
+						: `${skill.name} n’a pas été désinstallée. Aucun fichier n’a été supprimé.`,
+				);
+			}
+			setPendingUninstall(null);
+		} catch {
+			setPendingUninstall(null);
+			setActionError(
+				`La désinstallation de ${skill.name} n’a pas pu aboutir. Aucun fichier n’a été supprimé.`,
+			);
+		} finally {
+			setBusy(null);
+		}
+	};
+
+	if (loading && !model) {
+		return <InstalledSkeleton />;
 	}
 
-	if (error) {
+	if (!model) {
 		return (
-			<div className="flex flex-col items-center justify-center gap-3 h-full">
-				<p className="text-sm text-destructive">{error}</p>
-				<Button variant="outline" size="sm" onClick={load}>
-					Retry
+			<div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+				<AlertTriangle className="size-8 text-destructive" />
+				<p className="text-sm text-destructive">
+					{error ?? "Vos installations ne sont pas disponibles."}
+				</p>
+				<Button variant="outline" onClick={() => void refresh()}>
+					<RefreshCw className="size-4" />
+					Réessayer
 				</Button>
 			</div>
 		);
 	}
 
 	return (
-		<div className="flex flex-col gap-4 p-6">
-			{/* Header */}
-			<div className="flex items-center justify-between">
-				<h1 className="text-lg font-semibold">Installed Skills</h1>
-				<Button variant="outline" size="sm" onClick={load} disabled={loading}>
-					<RefreshCw className={cn("size-3.5", registryLoading && "animate-spin")} />
-					Refresh
-				</Button>
-			</div>
-
-			{/* Stats */}
-			{skills.length > 0 && (
-				<div className="flex items-center gap-4 text-sm">
-					<span className="text-muted-foreground">
-						<span className="font-medium text-foreground">{stats.total}</span> skills
-						{stats.installations !== stats.total && (
-							<>
-								{" · "}
-								<span className="font-medium text-foreground">{stats.installations}</span> installs
-							</>
-						)}
-					</span>
-					{registryLoading && org && (
-						<span className="text-muted-foreground">checking registry</span>
-					)}
-					{stats.updateCount > 0 && (
-						<span className="text-amber-400">
-							<span className="font-medium">{stats.updateCount}</span> update
-							{stats.updateCount > 1 ? "s" : ""}
-						</span>
-					)}
-					{stats.localOnly > 0 && (
-						<span className="text-blue-400">
-							<span className="font-medium">{stats.localOnly}</span> local only
-						</span>
-					)}
+		<div className="mx-auto flex w-full max-w-5xl flex-col gap-5 p-6">
+			<header className="flex flex-wrap items-start justify-between gap-4">
+				<div className="space-y-1">
+					<h1 className="text-xl font-semibold">Mes skills</h1>
+					<p className="text-sm text-muted-foreground">
+						Une ligne par skill, quel que soit le nombre d’assistants connectés.
+					</p>
 				</div>
+				<Button variant="outline" size="sm" onClick={() => void refresh()} disabled={refreshing}>
+					{refreshing ? (
+						<Loader2 className="size-3.5 animate-spin" />
+					) : (
+						<RefreshCw className="size-3.5" />
+					)}
+					Actualiser
+				</Button>
+			</header>
+
+			{actionError && (
+				<p
+					className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+					role="alert"
+				>
+					{actionError}
+				</p>
 			)}
 
-			{skills.length === 0 ? (
-				<div className="flex flex-col items-center justify-center gap-2 py-12">
-					<FolderOpen className="size-10 text-muted-foreground" />
-					<p className="text-muted-foreground">No skills installed</p>
-				</div>
+			{model.skills.length === 0 ? (
+				<EmptyInstalled />
 			) : (
 				<>
-					{/* Search */}
 					<div className="relative">
 						<Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
 						<Input
-							placeholder="Search installed skills..."
-							value={search}
-							onChange={(e) => handleSearch(e.target.value)}
-							className="pl-9"
+							type="search"
+							value={query}
+							onChange={(event) => setQuery(event.target.value)}
+							placeholder="Rechercher dans mes skills"
+							aria-label="Rechercher dans mes skills"
+							className="pl-10"
 						/>
 					</div>
 
-					{/* Filters */}
-					{(presentAgents.length > 1 || presentScopes.length > 1) && (
-						<div className="flex items-center gap-3 flex-wrap">
-							{presentAgents.length > 1 &&
-								presentAgents.map((agent) => {
-									const active = selectedAgents.includes(agent);
-									return (
-										<button
-											key={agent}
-											type="button"
-											onClick={() => toggleAgent(agent)}
-											className={cn(
-												"inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-all cursor-pointer",
-												active
-													? "bg-primary/15 text-primary border-primary/40"
-													: "bg-transparent text-muted-foreground border-border hover:border-muted-foreground/40",
-											)}
-										>
-											<CircleDot className="size-3" />
-											{agent}
-											{active && <X className="size-3 opacity-70" />}
-										</button>
-									);
-								})}
-							{presentAgents.length > 1 && presentScopes.length > 1 && (
-								<div className="h-4 w-px bg-border" />
-							)}
-							{presentScopes.length > 1 &&
-								presentScopes.map((scope) => {
-									const active = selectedScopes.includes(scope);
-									return (
-										<button
-											key={scope}
-											type="button"
-											onClick={() => toggleScope(scope)}
-											className={cn(
-												"inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-all cursor-pointer",
-												active
-													? "bg-primary/15 text-primary border-primary/40"
-													: "bg-transparent text-muted-foreground border-border hover:border-muted-foreground/40",
-											)}
-										>
-											{scope}
-											{active && <X className="size-3 opacity-70" />}
-										</button>
-									);
-								})}
-							{hasActiveFilters && (
-								<button
-									type="button"
-									onClick={() => {
-										setSearch("");
-										setDebouncedSearch("");
-										setSelectedAgents([]);
-										setSelectedScopes([]);
-									}}
-									className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-								>
-									Clear all
-								</button>
-							)}
-						</div>
-					)}
-
-					{/* Skills list */}
-					{groupedSkills.length > 0 ? (
-						<div className="space-y-2">
-							{groupedSkills.map((group) => {
-								const primarySkill = group.installations[0];
-								if (!primarySkill) return null;
-
-								const groupUpdates = group.installations
-									.map((skill) => getUpdate(skill))
-									.filter((update): update is UpdateInfo => Boolean(update));
-								const installationStatuses = group.installations.map((skill) =>
-									getSyncStatus(skill, updates, registryLoading && !!org, trackedLookup),
+					{filteredSkills.length > 0 ? (
+						<div className="space-y-3">
+							{filteredSkills.map((skill) => {
+								const installation = overview?.installations.find(
+									(item) => item.installation.installationId === skill.installationId,
 								);
-								const groupStatus: InstalledSyncStatus = installationStatuses.includes("checking")
-									? "checking"
-									: installationStatuses.includes("managed_modified_locally")
-										? "managed_modified_locally"
-										: installationStatuses.includes("managed_update_available")
-											? "managed_update_available"
-											: installationStatuses.includes("managed_auto_update_disabled")
-												? "managed_auto_update_disabled"
-												: installationStatuses.every((status) => status === "managed_synced")
-													? "managed_synced"
-													: "local_only";
-								const primaryAction = registryLoading
-									? null
-									: getLocalSkillAction(primarySkill, registrySkills);
-								const groupActionLoading = group.installations.some(
-									(skill) => actionLoading === getInstallKey(skill),
-								);
-								const envSummary = envInventory
-									? getEnvStatusForSkills(group.installations, envInventory)
-									: null;
-
 								return (
-									<div key={group.name.toLowerCase()} className="rounded-xl border bg-card p-4">
-										<div className="flex items-start justify-between gap-4">
-											<div className="flex min-w-0 flex-1 flex-col gap-1.5">
-												<div className="flex items-center gap-2 flex-wrap">
-													<span className="font-medium truncate">{group.name}</span>
-													<Badge variant="secondary">{getVersionLabel(group)}</Badge>
-													<StatusBadge status={groupStatus} update={groupUpdates[0]} />
-													{envSummary && <EnvStatusBadge summary={envSummary} />}
-													<span className="text-[11px] text-muted-foreground/60">
-														{group.installations.length} install
-														{group.installations.length > 1 ? "s" : ""}
-													</span>
-												</div>
-												{group.description && (
-													<p className="text-sm text-muted-foreground line-clamp-1">
-														{group.description}
-													</p>
-												)}
-												<div className="flex items-center gap-2 flex-wrap">
-													{group.tags.length > 0 && (
-														<div className="flex flex-wrap gap-1">
-															{group.tags.slice(0, 4).map((tag) => (
-																<span
-																	key={tag}
-																	className="inline-flex items-center rounded-full border px-2 py-0 text-[11px] font-medium"
-																	style={tagStyle(tag, false)}
-																>
-																	{tag}
-																</span>
-															))}
-														</div>
-													)}
-													{group.modified_at && (
-														<span className="text-[11px] text-muted-foreground/50">
-															<Clock className="inline size-2.5 -mt-px" />
-															{"  "}
-															{timeAgo(group.modified_at)}
-														</span>
-													)}
-												</div>
-												{recentProposals[group.name] && recentProposals[group.name].length > 0 && (
-													<div className="flex flex-wrap items-center gap-2 pt-1">
-														<span className="text-[11px] uppercase tracking-wide text-muted-foreground/60">
-															Recent proposals
-														</span>
-														{recentProposals[group.name].map((proposal) => (
-															<span
-																key={proposal.id}
-																className={cn(
-																	"inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium",
-																	getProposalTone(proposal.status),
-																)}
-															>
-																{proposal.title}
-																<span className="opacity-70">· {timeAgo(proposal.createdAt)}</span>
-															</span>
-														))}
-													</div>
-												)}
-											</div>
-
-											{org && (
-												<Button
-													variant="outline"
-													size="sm"
-													disabled={groupActionLoading || registryLoading}
-													onClick={() => {
-														if (!primaryAction) return;
-														if (primaryAction === "propose") {
-															setProposeSkill(primarySkill);
-														} else {
-															setPublishSkill(primarySkill);
-														}
-													}}
-													className="shrink-0"
-												>
-													{registryLoading ? (
-														<Loader2 className="size-3.5 animate-spin" />
-													) : primaryAction === "propose" ? (
-														<Send className="size-3.5" />
-													) : (
-														<Upload className="size-3.5" />
-													)}
-													{registryLoading
-														? "Checking"
-														: primaryAction === "propose"
-															? "Propose"
-															: "Publish"}
-												</Button>
-											)}
-										</div>
-
-										<div className="mt-3 flex flex-col gap-1.5">
-											{group.installations.map((skill) => {
-												const update = getUpdate(skill);
-												const tracked = getTrackedInstallation(skill, trackedLookup);
-												const status = getSyncStatus(
-													skill,
-													updates,
-													registryLoading && !!org,
-													trackedLookup,
-												);
-												const key = getInstallKey(skill);
-												const isLoading = actionLoading === key;
-												const autoUpdateEnabled = tracked?.autoUpdateEnabled !== false;
-
-												return (
-													<div
-														key={key}
-														className="flex items-center justify-between gap-3 rounded-lg bg-muted/30 px-3 py-2"
-													>
-														<div className="flex min-w-0 flex-wrap items-center gap-2">
-															<span className="text-xs font-medium capitalize">{skill.agent}</span>
-															<span className="text-xs text-muted-foreground">{skill.scope}</span>
-															<Badge variant="outline">{skill.version}</Badge>
-															<StatusBadge status={status} update={update} />
-															<span className="truncate text-[11px] text-muted-foreground/50">
-																{skill.path}
-															</span>
-														</div>
-														<div className="flex shrink-0 items-center gap-1.5">
-															{tracked && (
-																<Button
-																	variant="outline"
-																	size="sm"
-																	disabled={isLoading}
-																	onClick={() => handleToggleAutoUpdate(skill, !autoUpdateEnabled)}
-																>
-																	<RefreshCw className="size-3.5" />
-																	{autoUpdateEnabled ? "Auto-update on" : "Auto-update off"}
-																</Button>
-															)}
-															{tracked && update && (
-																<Button
-																	variant="outline"
-																	size="sm"
-																	disabled={isLoading}
-																	onClick={() => handleUpdate(skill, update)}
-																	className="text-accent"
-																>
-																	{isLoading ? (
-																		<Loader2 className="size-3.5 animate-spin" />
-																	) : (
-																		<ArrowUpCircle className="size-3.5" />
-																	)}
-																	Update
-																</Button>
-															)}
-															<Button
-																variant="ghost"
-																size="sm"
-																disabled={isLoading}
-																onClick={() => handleUninstall(skill)}
-																className="text-destructive hover:text-destructive"
-																title={`Uninstall from ${skill.agent} ${skill.scope}`}
-															>
-																{isLoading ? (
-																	<Loader2 className="size-3.5 animate-spin" />
-																) : (
-																	<Trash2 className="size-3.5" />
-																)}
-															</Button>
-														</div>
-													</div>
-												);
-											})}
-										</div>
-									</div>
+									<InstalledSkillRow
+										key={skill.installationId}
+										skill={skill}
+										installation={installation}
+										expanded={expandedSkill === skill.name}
+										busy={busy}
+										onToggleDetails={() =>
+											setExpandedSkill((current) => (current === skill.name ? null : skill.name))
+										}
+										onUpdate={() => void handleUpdate()}
+										onRepair={() => void handleRepair(skill.installationId)}
+										menuOpen={openMenu === skill.installationId}
+										onToggleMenu={() =>
+											setOpenMenu((current) =>
+												current === skill.installationId ? null : skill.installationId,
+											)
+										}
+										onUninstall={() => {
+											setOpenMenu(null);
+											setActionError(null);
+											setPendingUninstall(skill);
+										}}
+									/>
 								);
 							})}
 						</div>
 					) : (
-						<div className="flex flex-col items-center justify-center gap-2 py-12">
-							<FolderOpen className="size-10 text-muted-foreground" />
-							<p className="text-muted-foreground">No skills match your filters</p>
-							<Button
-								variant="outline"
-								size="sm"
-								onClick={() => {
-									setSearch("");
-									setDebouncedSearch("");
-									setSelectedAgents([]);
-									setSelectedScopes([]);
-								}}
-							>
-								Clear filters
-							</Button>
+						<div className="panel-inset flex min-h-40 flex-col items-center justify-center gap-2 rounded-xl p-6 text-center">
+							<FolderOpen className="size-7 text-muted-foreground" />
+							<p className="text-sm text-muted-foreground">
+								Aucune skill ne correspond à votre recherche.
+							</p>
 						</div>
 					)}
 				</>
 			)}
 
-			{publishSkill && org && (
-				<PublishDialog
-					skill={publishSkill}
-					org={org}
-					onClose={() => setPublishSkill(null)}
-					onPublished={() => {
-						setPublishSkill(null);
-						load();
+			{pendingUninstall && (
+				<UninstallManagedSkillDialog
+					skillName={pendingUninstall.name}
+					busy={busy === "uninstall"}
+					onClose={() => {
+						if (busy !== "uninstall") setPendingUninstall(null);
 					}}
+					onConfirm={() => void handleUninstall()}
 				/>
 			)}
+		</div>
+	);
+}
 
-			{proposeSkill && org && (
-				<ProposeDialog
-					skill={proposeSkill}
-					org={org}
-					onClose={() => setProposeSkill(null)}
-					onSubmitted={(proposal) => {
-						const skillName = proposeSkill.name;
-						setProposeSkill(null);
-						setRecentProposals((prev) => ({
-							...prev,
-							[skillName]: [
-								proposal,
-								...(prev[skillName] || []).filter((item) => item.id !== proposal.id),
-							].slice(0, 3),
-						}));
-					}}
-				/>
+function InstalledSkillRow({
+	skill,
+	installation,
+	expanded,
+	busy,
+	onToggleDetails,
+	onUpdate,
+	onRepair,
+	menuOpen,
+	onToggleMenu,
+	onUninstall,
+}: {
+	skill: EmployeeSkillRow;
+	installation: ManagedOverviewInstallation | undefined;
+	expanded: boolean;
+	busy: InstalledAction | null;
+	onToggleDetails: () => void;
+	onUpdate: () => void;
+	onRepair: () => void;
+	menuOpen: boolean;
+	onToggleMenu: () => void;
+	onUninstall: () => void;
+}) {
+	const action = rowAction(skill);
+	const actionHandler =
+		action === "update" ? onUpdate : action === "repair" ? onToggleDetails : undefined;
+
+	return (
+		<article className="panel-inset overflow-hidden rounded-xl">
+			<div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center">
+				<div className="min-w-0 flex-1 space-y-2">
+					<div className="flex flex-wrap items-center gap-2">
+						<h2 className="truncate text-base font-semibold">{skill.name}</h2>
+						<span
+							className={cn(
+								"text-xs font-medium",
+								skill.state === "ready"
+									? "text-accent"
+									: skill.state === "update_available"
+										? "text-primary"
+										: "text-destructive",
+							)}
+						>
+							{skill.statusLabel}
+						</span>
+					</div>
+					<AgentAvailability availableAgents={skill.availableIn} compact />
+				</div>
+
+				<div className="flex shrink-0 items-center gap-2">
+					{action === "configure" ? (
+						<Link
+							to={`/env?skill=${encodeURIComponent(skill.name)}`}
+							aria-label={`Configurer ${skill.name}`}
+							className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+						>
+							Configurer
+						</Link>
+					) : (
+						<SkillPrimaryAction
+							kind={action}
+							skillName={skill.name}
+							disabled={busy !== null}
+							onAction={actionHandler}
+						/>
+					)}
+					<div className="relative">
+						<Button
+							variant="ghost"
+							size="icon"
+							aria-label={`Plus d’actions pour ${skill.name}`}
+							aria-haspopup="true"
+							aria-expanded={menuOpen}
+							onClick={onToggleMenu}
+							disabled={busy !== null}
+							className="size-8"
+						>
+							<MoreHorizontal className="size-4" />
+						</Button>
+						{menuOpen && (
+							<div className="panel-raised absolute right-0 top-10 z-20 min-w-52 rounded-lg p-1 shadow-xl">
+								<button
+									type="button"
+									aria-label={`Désinstaller ${skill.name}`}
+									onClick={onUninstall}
+									className="flex w-full items-center rounded-md px-3 py-2 text-left text-sm text-destructive transition-colors hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+								>
+									Désinstaller
+								</button>
+							</div>
+						)}
+					</div>
+				</div>
+			</div>
+
+			{expanded && installation && (
+				<div className="space-y-3 border-t border-border bg-background/30 px-5 py-4">
+					<div className="flex items-center gap-2">
+						<ShieldCheck className="size-4 text-primary" />
+						<h3 className="text-sm font-semibold">État des connexions</h3>
+					</div>
+					<ul className="space-y-2">
+						{installation.bindings.map((binding) => (
+							<li key={binding.agent} className="flex items-center justify-between gap-4 text-sm">
+								<span className="capitalize">{binding.agent}</span>
+								<span className="text-muted-foreground">{bindingStatusLabel(binding.status)}</span>
+							</li>
+						))}
+					</ul>
+					<p className="text-xs text-muted-foreground">
+						Un conflit reste intact tant qu’il n’est pas résolu explicitement.
+					</p>
+					<Button variant="outline" size="sm" onClick={onRepair} disabled={busy !== null}>
+						{busy === "repair" && <Loader2 className="size-3.5 animate-spin" />}
+						Réparer ce qui peut l’être
+					</Button>
+				</div>
 			)}
+		</article>
+	);
+}
+
+function rowAction(skill: EmployeeSkillRow): SkillPrimaryActionKind {
+	switch (skill.primaryAction) {
+		case "configure":
+			return "configure";
+		case "repair":
+			return "repair";
+		case "update":
+			return "update";
+		default:
+			return "none";
+	}
+}
+
+function bindingStatusLabel(
+	status: ManagedOverviewInstallation["bindings"][number]["status"],
+): string {
+	switch (status) {
+		case "ready":
+			return "Prête";
+		case "needs_restart":
+			return "Redémarrage nécessaire";
+		case "missing":
+			return "Connexion manquante";
+		case "conflict":
+			return "Conflit à vérifier";
+		case "unsupported":
+			return "Non compatible";
+		default:
+			return "Vérification nécessaire";
+	}
+}
+
+function EmptyInstalled() {
+	return (
+		<div className="panel-inset flex min-h-56 flex-col items-center justify-center gap-3 rounded-xl p-8 text-center">
+			<PackageOpen className="size-9 text-muted-foreground" />
+			<div className="space-y-1">
+				<p className="text-sm font-medium">Aucune skill installée</p>
+				<p className="text-xs text-muted-foreground">
+					Parcourez le catalogue approuvé pour ajouter votre première capability.
+				</p>
+			</div>
+			<Link to="/catalog" className={cn(buttonVariants({ variant: "default", size: "sm" }))}>
+				Parcourir le catalogue
+			</Link>
+		</div>
+	);
+}
+
+function InstalledSkeleton() {
+	return (
+		<div className="mx-auto flex w-full max-w-5xl animate-pulse flex-col gap-4 p-6 motion-reduce:animate-none">
+			<div className="h-12 rounded-lg bg-muted" />
+			<div className="h-24 rounded-xl bg-card" />
+			<div className="h-24 rounded-xl bg-card" />
 		</div>
 	);
 }

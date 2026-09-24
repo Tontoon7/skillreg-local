@@ -6,5 +6,8 @@ pub mod config;
 pub mod env;
 pub mod installed_manifest;
 pub mod local;
+pub mod local_import;
+pub mod managed_migration;
+pub mod managed_skills;
 pub mod skills;
 pub mod slash_commands;

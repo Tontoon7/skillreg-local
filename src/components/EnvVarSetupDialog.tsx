@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { listOrgEnvVars, setOrgEnvVar } from "@/lib/api";
 import type { EnvVarDecl } from "@/lib/types";
-import { Key, Loader2, Save, SkipForward, X } from "lucide-react";
+import { KeyRound, Loader2, Save, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 interface EnvVarSetupDialogProps {
@@ -28,124 +28,143 @@ export function EnvVarSetupDialog({
 	const [loaded, setLoaded] = useState(false);
 	const [configuredNames, setConfiguredNames] = useState<Set<string>>(new Set());
 	const missingEnvVars = useMemo(
-		() => envVars.filter((variable) => !configuredNames.has(variable.name.trim().toUpperCase())),
-		[envVars, configuredNames],
+		() => envVars.filter((variable) => !configuredNames.has(normalizeName(variable.name))),
+		[configuredNames, envVars],
 	);
 
-	// Close on Escape
 	useEffect(() => {
-		const handler = (e: KeyboardEvent) => {
-			if (e.key === "Escape") onClose();
+		const handleEscape = (event: KeyboardEvent) => {
+			if (event.key === "Escape") onClose();
 		};
-		window.addEventListener("keydown", handler);
-		return () => window.removeEventListener("keydown", handler);
+		window.addEventListener("keydown", handleEscape);
+		return () => window.removeEventListener("keydown", handleEscape);
 	}, [onClose]);
 
-	// Pre-fill missing fields with non-secret defaults only.
 	useEffect(() => {
-		const init: Record<string, string> = {};
-		for (const v of envVars) {
-			init[v.name] = v.default ?? "";
-		}
-
+		const initialValues = Object.fromEntries(
+			envVars.map((variable) => [variable.name, variable.secret ? "" : (variable.default ?? "")]),
+		);
 		listOrgEnvVars(org)
-			.then((existing) =>
-				setConfiguredNames(new Set(existing.map((variable) => variable.name.trim().toUpperCase()))),
-			)
+			.then((existing) => {
+				setConfiguredNames(new Set(existing.map((variable) => normalizeName(variable.name))));
+			})
 			.catch(() => {})
 			.finally(() => {
-				setValues(init);
+				setValues(initialValues);
 				setLoaded(true);
 			});
-	}, [org, envVars]);
+	}, [envVars, org]);
 
 	const handleSave = async () => {
-		// Validate required fields
-		const missing = missingEnvVars.filter((v) => v.required && !values[v.name]?.trim());
-		if (missing.length > 0) {
-			setError(`Required: ${missing.map((v) => v.name).join(", ")}`);
+		const missingRequired = missingEnvVars.filter(
+			(variable) => variable.required && !values[variable.name]?.trim(),
+		);
+		if (missingRequired.length > 0) {
+			setError(
+				`Renseignez les accès obligatoires : ${missingRequired
+					.map((variable) => variable.description || variable.name)
+					.join(", ")}.`,
+			);
 			return;
 		}
 
-		// Only save non-empty values
-		const toSave: Record<string, string> = {};
-		for (const variable of missingEnvVars) {
-			const value = values[variable.name];
-			if (value?.trim()) toSave[variable.name] = value.trim();
-		}
-
-		if (Object.keys(toSave).length === 0) {
-			onClose();
+		const valuesToSave = missingEnvVars.flatMap((variable) => {
+			const value = values[variable.name]?.trim();
+			return value ? [[variable.name, value] as const] : [];
+		});
+		if (valuesToSave.length === 0) {
+			onSaved();
 			return;
 		}
 
 		setSaving(true);
 		setError(null);
 		try {
-			await Promise.all(
-				Object.entries(toSave).map(([key, value]) => setOrgEnvVar(org, key, value)),
-			);
+			await Promise.all(valuesToSave.map(([key, value]) => setOrgEnvVar(org, key, value)));
 			onSaved();
-		} catch (e) {
-			setError(typeof e === "string" ? e : "Failed to save variables");
+		} catch (saveError) {
+			setError(
+				typeof saveError === "string" ? saveError : "Les accès n’ont pas pu être enregistrés.",
+			);
 		} finally {
 			setSaving(false);
 		}
 	};
 
 	return (
-		<div className="fixed inset-0 z-50 flex items-center justify-center">
-			<div className="absolute inset-0 bg-black/50" onClick={onClose} onKeyDown={undefined} />
-
-			<div className="relative z-10 w-full max-w-lg rounded-xl border bg-card p-6 shadow-lg space-y-4">
-				<div className="flex items-center justify-between">
-					<div className="flex items-center gap-2">
-						<Key className="size-4 text-muted-foreground" />
-						<h2 className="text-base font-semibold">Configure Environment Variables</h2>
+		<div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+			<button
+				type="button"
+				aria-label="Fermer"
+				className="absolute inset-0 bg-black/65"
+				onClick={onClose}
+			/>
+			<dialog
+				open
+				aria-labelledby="access-dialog-title"
+				className="panel-raised relative z-10 m-0 w-full max-w-lg space-y-5 rounded-xl p-6 text-foreground shadow-xl"
+			>
+				<header className="flex items-start justify-between gap-4">
+					<div className="flex gap-3">
+						<div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+							<KeyRound className="size-4" />
+						</div>
+						<div className="space-y-1">
+							<h2 id="access-dialog-title" className="text-base font-semibold">
+								Configurer les accès
+							</h2>
+							<p className="text-sm text-muted-foreground">
+								{skillName} a besoin de quelques informations pour fonctionner.
+							</p>
+						</div>
 					</div>
-					<Button variant="ghost" size="icon" onClick={onClose} className="size-7">
+					<Button
+						variant="ghost"
+						size="icon"
+						aria-label="Fermer"
+						onClick={onClose}
+						className="size-8"
+					>
 						<X className="size-4" />
 					</Button>
-				</div>
-
-				<p className="text-sm text-muted-foreground">
-					<span className="font-medium text-foreground">{skillName}</span> requires the missing
-					environment variables below.
-				</p>
+				</header>
 
 				{!loaded ? (
-					<div className="flex justify-center py-6">
+					<div className="flex min-h-32 items-center justify-center">
 						<Loader2 className="size-5 animate-spin text-muted-foreground" />
 					</div>
 				) : (
-					<div className="space-y-3 max-h-80 overflow-y-auto">
+					<div className="max-h-80 space-y-4 overflow-y-auto">
 						{missingEnvVars.length === 0 ? (
-							<p className="text-sm text-muted-foreground">
-								All required variables are already configured for this organization.
+							<p className="rounded-lg border border-accent/20 bg-accent/5 p-3 text-sm text-accent">
+								Tous les accès nécessaires sont déjà configurés.
 							</p>
 						) : (
-							missingEnvVars.map((v) => (
-								<div key={v.name} className="space-y-1.5">
-									<div className="flex items-center gap-2">
-										<Label htmlFor={`env-${v.name}`} className="font-mono text-xs">
-											{v.name}
+							missingEnvVars.map((variable) => (
+								<div key={variable.name} className="space-y-2">
+									<div className="flex flex-wrap items-center gap-2">
+										<Label htmlFor={`env-${variable.name}`}>
+											{variable.description || variable.name}
 										</Label>
-										<Badge
-											variant={v.required ? "default" : "outline"}
-											className="text-[10px] px-1.5 py-0"
-										>
-											{v.required ? "required" : "optional"}
+										<Badge variant={variable.required ? "default" : "outline"}>
+											{variable.required ? "Obligatoire" : "Facultatif"}
 										</Badge>
 									</div>
-									{v.description && (
-										<p className="text-xs text-muted-foreground">{v.description}</p>
+									{variable.description && (
+										<p className="font-mono text-[11px] text-muted-foreground">{variable.name}</p>
 									)}
 									<Input
-										id={`env-${v.name}`}
-										placeholder={v.default || v.name}
-										value={values[v.name] ?? ""}
-										onChange={(e) => setValues((prev) => ({ ...prev, [v.name]: e.target.value }))}
-										className="font-mono text-xs"
+										id={`env-${variable.name}`}
+										type={variable.secret ? "password" : "text"}
+										autoComplete="off"
+										placeholder={variable.default || "Saisissez la valeur"}
+										value={values[variable.name] ?? ""}
+										onChange={(event) =>
+											setValues((current) => ({
+												...current,
+												[variable.name]: event.target.value,
+											}))
+										}
 									/>
 								</div>
 							))
@@ -153,23 +172,33 @@ export function EnvVarSetupDialog({
 					</div>
 				)}
 
+				<p className="text-xs text-muted-foreground">
+					Ces valeurs restent sur cet ordinateur et ne sont jamais ajoutées à la skill.
+				</p>
+
 				{error && (
-					<div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3">
-						<p className="text-sm text-destructive">{error}</p>
-					</div>
+					<p
+						className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+						role="alert"
+					>
+						{error}
+					</p>
 				)}
 
-				<div className="flex gap-3 pt-1">
-					<Button variant="outline" size="sm" onClick={onClose} disabled={saving}>
-						<SkipForward className="size-3.5" />
-						Skip
+				<footer className="flex justify-end gap-2">
+					<Button variant="ghost" onClick={onClose} disabled={saving}>
+						Plus tard
 					</Button>
-					<Button size="sm" onClick={handleSave} disabled={saving || !loaded}>
-						{saving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
-						Save
+					<Button onClick={() => void handleSave()} disabled={saving || !loaded}>
+						{saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+						Enregistrer
 					</Button>
-				</div>
-			</div>
+				</footer>
+			</dialog>
 		</div>
 	);
+}
+
+function normalizeName(value: string): string {
+	return value.trim().toUpperCase();
 }

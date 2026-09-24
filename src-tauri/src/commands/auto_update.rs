@@ -5,7 +5,18 @@ use super::{
         read_installed_manifest, upsert_tracked_installation, TrackedInstallation,
     },
     local::compute_content_hash,
+    managed_skills::{normalize_api_base, ManagedErrorDto},
     skills::{install_skill_from_registry, PaginatedSkills, API_BASE_URL},
+};
+use crate::managed_skills::{
+    agents::DefaultAgentRegistry,
+    errors::{ManagedError, ManagedErrorCode},
+    manifest::read_manifest,
+    paths::ManagedPaths,
+    platform_links::SystemPlatformLinker,
+    service::{
+        FileManifestStore, ManagedSkillService, ManagedUpdateSummary, ReqwestManagedRegistryClient,
+    },
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -16,7 +27,7 @@ use std::{
     sync::{Arc, OnceLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 use tokio::sync::Mutex;
 
@@ -109,6 +120,16 @@ pub async fn run_auto_update_now() -> Result<AutoUpdateRunSummary, String> {
     run_auto_update_once().await
 }
 
+#[tauri::command]
+pub async fn check_managed_updates(force: bool) -> Result<ManagedUpdateSummary, ManagedErrorDto> {
+    run_managed_update_cycle(force, false).await
+}
+
+#[tauri::command]
+pub async fn run_managed_updates_now() -> Result<ManagedUpdateSummary, ManagedErrorDto> {
+    run_managed_update_cycle(true, true).await
+}
+
 pub fn spawn_auto_update_worker(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         let jitter = deterministic_jitter();
@@ -119,11 +140,16 @@ pub fn spawn_auto_update_worker(app: AppHandle) {
                 .map(|config| config.auto_update_interval_minutes_value())
                 .unwrap_or(super::config::DEFAULT_AUTO_UPDATE_INTERVAL_MINUTES);
 
-            if read_config()
+            let enabled = read_config()
                 .map(|config| config.auto_update_enabled_value())
-                .unwrap_or(super::config::DEFAULT_AUTO_UPDATE_ENABLED)
-            {
-                if let Ok(summary) = run_auto_update_once().await {
+                .unwrap_or(super::config::DEFAULT_AUTO_UPDATE_ENABLED);
+            if enabled {
+                if has_managed_manifest() {
+                    if let Ok(summary) = run_managed_update_cycle(false, true).await {
+                        let _ = app.emit("managed-update:completed", summary.clone());
+                        notify_managed_update_completed(&app, &summary);
+                    }
+                } else if let Ok(summary) = run_auto_update_once().await {
                     let _ = app.emit("auto-update:completed", summary.clone());
                     notify_auto_update_completed(&app, &summary);
                 }
@@ -132,6 +158,49 @@ pub fn spawn_auto_update_worker(app: AppHandle) {
             tokio::time::sleep(Duration::from_secs(interval * 60) + deterministic_jitter()).await;
         }
     });
+}
+
+async fn run_managed_update_cycle(
+    force: bool,
+    apply: bool,
+) -> Result<ManagedUpdateSummary, ManagedErrorDto> {
+    let paths = ManagedPaths::from_home().map_err(ManagedErrorDto::from)?;
+    if !paths.manifest_path().exists() {
+        return Ok(ManagedUpdateSummary::default());
+    }
+    let manifest = read_manifest(&paths).map_err(ManagedErrorDto::from)?;
+    if manifest.skills.is_empty() {
+        return Ok(ManagedUpdateSummary::default());
+    }
+    let config = read_config().map_err(|_| {
+        ManagedErrorDto::from(ManagedError::new(
+            ManagedErrorCode::LocalConfigurationInvalid,
+        ))
+    })?;
+    let global_enabled = config.auto_update_enabled_value();
+    if !global_enabled && !force {
+        return Ok(ManagedUpdateSummary::default());
+    }
+    let token = config.token.ok_or_else(|| {
+        ManagedErrorDto::from(ManagedError::new(ManagedErrorCode::AuthenticationRequired))
+    })?;
+    let service = ManagedSkillService::new(
+        ReqwestManagedRegistryClient::new(token, normalize_api_base(config.api_url)),
+        DefaultAgentRegistry::default(),
+        SystemPlatformLinker::current(),
+        FileManifestStore,
+        paths,
+    );
+    service
+        .run_managed_updates(global_enabled, force, apply)
+        .await
+        .map_err(Into::into)
+}
+
+fn has_managed_manifest() -> bool {
+    ManagedPaths::from_home()
+        .map(|paths| paths.manifest_path().exists())
+        .unwrap_or(false)
 }
 
 async fn run_auto_update_once_inner() -> Result<AutoUpdateRunSummary, String> {
@@ -348,6 +417,31 @@ fn notify_auto_update_completed(app: &AppHandle, summary: &AutoUpdateRunSummary)
     let _ = app.notification().builder().title(title).body(body).show();
 }
 
+fn notify_managed_update_completed(app: &AppHandle, summary: &ManagedUpdateSummary) {
+    let foreground = app
+        .get_webview_window("main")
+        .and_then(|window| window.is_focused().ok())
+        .unwrap_or(false);
+    if !should_notify_managed_update(summary, foreground) {
+        return;
+    }
+    let title = if summary.updated == 1 {
+        "Skill updated"
+    } else {
+        "Skills updated"
+    };
+    let body = if summary.updated == 1 {
+        "SkillReg installed one approved update.".to_string()
+    } else {
+        format!("SkillReg installed {} approved updates.", summary.updated)
+    };
+    let _ = app.notification().builder().title(title).body(body).show();
+}
+
+fn should_notify_managed_update(summary: &ManagedUpdateSummary, app_is_foreground: bool) -> bool {
+    !app_is_foreground && summary.updated > 0
+}
+
 fn is_newer_version(server_version: &str, current_version: &str) -> bool {
     match compare_versions(server_version, current_version) {
         Some(Ordering::Greater) => true,
@@ -468,5 +562,27 @@ mod tests {
             should_update_installation(true, &tracked("1.0.0"), Some("abc123"), Some("1.1.0")),
             AutoUpdateDecision::Update
         );
+    }
+
+    #[test]
+    fn managed_notifications_require_an_actual_background_update() {
+        assert!(!should_notify_managed_update(
+            &ManagedUpdateSummary::default(),
+            false
+        ));
+        assert!(!should_notify_managed_update(
+            &ManagedUpdateSummary {
+                updated: 1,
+                ..Default::default()
+            },
+            true
+        ));
+        assert!(should_notify_managed_update(
+            &ManagedUpdateSummary {
+                updated: 1,
+                ..Default::default()
+            },
+            false
+        ));
     }
 }
