@@ -188,7 +188,7 @@ test("an interrupted root swap resumes from the same verified journal without dr
 					},
 				},
 			),
-		/simulated interruption/,
+		/Restore profile root: simulated interruption/,
 	);
 	assert.equal(
 		readFileSync(join(paths.recovery, "data/.skillreg/config.json"), "utf8"),
@@ -210,24 +210,26 @@ test("a changed profile after interruption is rejected without overwriting the n
 	t.after(() => rmSync(paths.root, { recursive: true, force: true }));
 	success(run("snapshot", paths));
 	const { execute } = await import("../scripts/managed-skills-backup-restore.mjs");
-	assert.throws(() =>
-		execute(
-			[
-				"restore",
-				"--home",
-				paths.home,
-				"--backup",
-				paths.backup,
-				"--apply",
-				"--recovery",
-				paths.recovery,
-			],
-			{
-				afterRename: () => {
-					throw new Error("simulated interruption");
+	assert.throws(
+		() =>
+			execute(
+				[
+					"restore",
+					"--home",
+					paths.home,
+					"--backup",
+					paths.backup,
+					"--apply",
+					"--recovery",
+					paths.recovery,
+				],
+				{
+					afterRename: () => {
+						throw new Error("simulated interruption");
+					},
 				},
-			},
-		),
+			),
+		/simulated interruption/,
 	);
 	writeFileSync(
 		join(paths.home, ".claude/skills/original/SKILL.md"),

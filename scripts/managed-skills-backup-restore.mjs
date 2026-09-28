@@ -32,6 +32,15 @@ function requireState(condition, message) {
 	if (!condition) throw new Error(message);
 }
 
+function during(phase, operation) {
+	try {
+		return operation();
+	} catch (error) {
+		// Filesystem messages may contain private paths; retain only their stable error code.
+		throw new Error(`${phase}: ${error.code || error.message}`);
+	}
+}
+
 function stat(path) {
 	try {
 		return lstatSync(path);
@@ -404,12 +413,14 @@ function restore(home, backup, recovery, target, afterRename) {
 			lstatSync(home).dev === lstatSync(dirname(recovery)).dev,
 			"Recovery must use the profile filesystem for atomic swaps",
 		);
-		before = snapshot(home, recovery);
-		clone(join(backup, "data"), join(recovery, "staged"), target.entries);
+		before = during("Restore recovery snapshot", () => snapshot(home, recovery));
+		during("Restore staging", () =>
+			clone(join(backup, "data"), join(recovery, "staged"), target.entries),
+		);
 		privateDirectory(join(recovery, "moved"));
 		writeDurable(journalPath, { version: 1, home, backup, targetHash, status: "pending" });
 	} else {
-		before = verify(home, recovery);
+		before = during("Restore recovery verification", () => verify(home, recovery));
 		requireState(
 			stat(journalPath)?.isFile() && !lstatSync(journalPath).isSymbolicLink(),
 			"Recovery has no valid restore journal",
@@ -424,23 +435,29 @@ function restore(home, backup, recovery, target, afterRename) {
 			"Recovery journal belongs to another restore",
 		);
 	}
-	resumeStates(home, recovery, before, target);
+	during("Restore state inspection", () => resumeStates(home, recovery, before, target));
 	for (let index = 0; index < roots.length; index++) {
 		const root = roots[index];
-		const state = resumeStates(home, recovery, before, target)[index];
+		const state = during("Restore state inspection", () =>
+			resumeStates(home, recovery, before, target),
+		)[index];
 		if (state === "done") continue;
 		if (state === "move" && stat(join(home, root))) {
-			renameSync(join(home, root), join(recovery, "moved", root));
-			flushDirectory(home);
-			flushDirectory(join(recovery, "moved"));
-			afterRename?.();
+			during("Restore profile root", () => {
+				renameSync(join(home, root), join(recovery, "moved", root));
+				flushDirectory(home);
+				flushDirectory(join(recovery, "moved"));
+				afterRename?.();
+			});
 		}
 		if (stat(join(recovery, "staged", root))) {
 			requireState(!stat(join(home, root)), "Restore destination reappeared during swap");
-			renameSync(join(recovery, "staged", root), join(home, root));
-			flushDirectory(home);
-			flushDirectory(join(recovery, "staged"));
-			afterRename?.();
+			during("Restore activation", () => {
+				renameSync(join(recovery, "staged", root), join(home, root));
+				flushDirectory(home);
+				flushDirectory(join(recovery, "staged"));
+				afterRename?.();
+			});
 		}
 	}
 	requireState(
@@ -457,7 +474,7 @@ function restore(home, backup, recovery, target, afterRename) {
 			"A journal update is ambiguous; inspect the retained recovery",
 		);
 	} else writeDurable(pending, completed);
-	renameSync(pending, journalPath);
+	during("Restore journal commit", () => renameSync(pending, journalPath));
 	flushDirectory(recovery);
 	return { status: "restored", entries: target.entries.length, recoveryPreserved: true };
 }

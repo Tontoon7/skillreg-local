@@ -114,7 +114,7 @@ identiques octet par octet. Revalidation locale : format/build PASS, Node 51/51,
 `cargo check` PASS ; Cargo `--no-fail-fast` 144 PASS et les quatre mêmes refus de sockets
 décrits en A1. Revue indépendante du diff : aucun défaut bloquant relevé.
 
-État courant : **échec Windows des helpers Node**, run `36404147565`, job `108868714172`
+Deuxième échec : **échec Windows des helpers Node**, run `36404147565`, job `108868714172`
 (43 PASS / 8 échecs). L’extrait fourni ne contient pas les erreurs individuelles.
 L’inspection identifie trois lectures stdin PowerShell sans encodage explicite, alors que Node
 transmet de l’UTF-8 : inventaire ACL, détection des junctions et préparation ACL du test.
@@ -127,6 +127,27 @@ Dans `reprise-1/ci-2-correction`, `pnpm test:node` passe 51/51 et Vitest 72/72 ;
 PASS. Cargo `--no-fail-fast` donne 144 PASS et les quatre refus de sockets décrits en A1.
 Les logs Node, frontend et Rust sont conservés avec le rapport. Revue indépendante du correctif :
 aucun défaut bloquant relevé. Le statut de release reste **NO-GO**.
+
+État courant : **échec Windows non résolu**, run `36405167007`, job `108872050735`
+(46 PASS / 5 échecs). Le nouvel extrait ne contient toujours aucun bloc d’erreur individuel.
+Le nombre correspond aux cinq tests exigeant une restauration réussie, mais ne prouve ni
+leur identité ni la cause. L’inspection du second clonage, des ACL, des chemins, des inventaires
+vides et des swaps n’a pas permis de démontrer un défaut Windows. Aucun runtime Windows local
+n’est disponible. Ne pas considérer le correctif UTF-8 ni les résultats macOS comme une preuve
+de résolution de ces cinq échecs.
+
+Cette étape ajoute des diagnostics de phase (sauvegarde de récupération, staging, vérification,
+inspection d’état, déplacement, activation et commit du journal), sans remonter les chemins
+des erreurs filesystem ni stderr natif. Le test de profil changé après interruption exige
+désormais l’exception du hook : une panne antérieure ne peut plus le faire passer par erreur.
+Le test du diagnostic échoue avant modification puis passe ; les dix tests de sauvegarde
+passent localement (`reprise-1/ci-3-correction/diagnostic-red.log` et `diagnostic-green.log`).
+La revue indépendante n’a relevé aucun défaut dans ce changement diagnostique. Il faut récupérer
+les blocs `not ok` complets du run Windows pour corriger la cause ; la gate N1 reste ouverte.
+Revalidation locale : format/build et `cargo check` PASS, Node 51/51, Vitest 72/72.
+La chaîne bloquante s’arrête sur les quatre refus de sockets décrits en A1 ; l’exécution
+Rust `--no-fail-fast` termine avec 144 PASS et ces quatre échecs, aucun test ignoré.
+Journaux Node, Vitest, Cargo et reproduction rouge/verte conservés dans la sortie de cette étape.
 
 Une compilation macOS arm64 locale
 ne complète aucune ligne Windows/Linux/x64. Le compte administrateur du runner Windows ne
