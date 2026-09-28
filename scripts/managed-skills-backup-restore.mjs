@@ -417,8 +417,10 @@ function restore(home, backup, recovery, target, afterRename) {
 		during("Restore staging", () =>
 			clone(join(backup, "data"), join(recovery, "staged"), target.entries),
 		);
-		privateDirectory(join(recovery, "moved"));
-		writeDurable(journalPath, { version: 1, home, backup, targetHash, status: "pending" });
+		during("Restore recovery preparation", () => privateDirectory(join(recovery, "moved")));
+		during("Restore journal write", () =>
+			writeDurable(journalPath, { version: 1, home, backup, targetHash, status: "pending" }),
+		);
 	} else {
 		before = during("Restore recovery verification", () => verify(home, recovery));
 		requireState(

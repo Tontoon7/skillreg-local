@@ -149,6 +149,17 @@ La chaîne bloquante s’arrête sur les quatre refus de sockets décrits en A1 
 Rust `--no-fail-fast` termine avec 144 PASS et ces quatre échecs, aucun test ignoré.
 Journaux Node, Vitest, Cargo et reproduction rouge/verte conservés dans la sortie de cette étape.
 
+Arbitrage après le run `36406359358`, job `108875937930` (Windows toujours en échec, aucun
+journal disponible hors GitHub) : les trois corrections n’ont reçu que la fin du journal CI.
+Hors terminal, `node --test` utilise le reporter TAP : les blocs `not ok` restent au milieu du
+journal et la fin ne contient que les totaux. `pnpm test:node` utilise désormais
+`--test-reporter=spec`, qui répète après les totaux chaque test en échec avec son erreur et sa
+pile. Les tests, assertions et le workflow sont inchangés. La création du dossier `moved` et
+l’écriture initiale du journal indiquent aussi leur phase. La cause Windows reste à établir
+depuis ce résumé ; la gate N1 reste ouverte. Revalidation locale : format/build et
+`cargo check` PASS, Node 51/51, Vitest 72/72, Cargo `--no-fail-fast` 144 PASS et les quatre
+refus de sockets décrits en A1.
+
 Une compilation macOS arm64 locale
 ne complète aucune ligne Windows/Linux/x64. Le compte administrateur du runner Windows ne
 remplace pas N5.

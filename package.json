@@ -12,7 +12,7 @@
 		"format": "biome check --write .",
 		"format:check": "biome check .",
 		"test": "pnpm test:node && pnpm test:frontend",
-		"test:node": "node --test --experimental-strip-types tests/*.test.ts",
+		"test:node": "node --test --test-reporter=spec --experimental-strip-types tests/*.test.ts",
 		"test:frontend": "vitest run",
 		"test:watch": "vitest"
 	},
