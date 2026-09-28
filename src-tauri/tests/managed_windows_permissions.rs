@@ -68,6 +68,7 @@ fn broad_inheritance_is_removed_and_private_acl_survives_manifest_replacement() 
         paths.skillreg_root(),
         r#"
 $ErrorActionPreference = 'Stop'
+Import-Module "$PSHOME\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1"
 $path = $env:SKILLREG_TEST_PATH
 $acl = Get-Acl -LiteralPath $path
 $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
@@ -86,6 +87,7 @@ Set-Acl -LiteralPath $path -AclObject $acl
                 &path,
                 r#"
 $ErrorActionPreference = 'Stop'
+Import-Module "$PSHOME\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1"
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $acl = Get-Acl -LiteralPath $env:SKILLREG_TEST_PATH
 if (-not $acl.AreAccessRulesProtected) { throw 'Inheritance enabled' }
@@ -140,6 +142,7 @@ fn denied_junction_creation_leaves_no_partial_binding_or_target_mutation() {
         &parent,
         r#"
 $ErrorActionPreference = 'Stop'
+Import-Module "$PSHOME\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1"
 $path = $env:SKILLREG_TEST_PATH
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
 $acl = Get-Acl -LiteralPath $path

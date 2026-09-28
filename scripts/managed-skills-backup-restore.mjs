@@ -121,7 +121,8 @@ public static class ProfileAcl {
         IntPtr next; uint size;
         if (!ConvertStringSecurityDescriptorToSecurityDescriptor(replacement, 1, out next, out size)) throw new Win32Exception(Marshal.GetLastWin32Error());
         try {
-          uint flags = replacement.Contains("D:P") ? 0x80000004u : 0x20000004u;
+          // Clones already allow inheritance. Do not request a fresh inheritance pass over the saved DACL.
+          uint flags = replacement.Contains("D:P") ? 0x80000004u : 4u;
           if (!SetKernelObjectSecurity(handle, flags, next)) throw new Win32Exception(Marshal.GetLastWin32Error());
         } finally { LocalFree(next); }
       }

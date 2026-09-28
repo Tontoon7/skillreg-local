@@ -276,6 +276,16 @@ test("ACL metadata survives restoration and a linked backup data directory is re
 	const paths = fixture();
 	t.after(() => rmSync(paths.root, { recursive: true, force: true }));
 	const config = join(paths.home, ".skillreg/config.json");
+	const modules = join(paths.root, "modules");
+	if (process.platform === "win32") {
+		const module = join(modules, "Microsoft.PowerShell.Security");
+		mkdirSync(module, { recursive: true });
+		writeFileSync(
+			join(module, "Microsoft.PowerShell.Security.psd1"),
+			"@{ ModuleVersion='1.0.0'; RootModule='Security.psm1'; FunctionsToExport=@('Get-Acl','Set-Acl') }",
+		);
+		writeFileSync(join(module, "Security.psm1"), "throw 'Incompatible inherited Security module'");
+	}
 	const acl =
 		process.platform === "darwin"
 			? spawnSync("/bin/chmod", ["+a", "everyone allow read", config], { encoding: "utf8" })
@@ -287,9 +297,13 @@ test("ACL metadata survives restoration and a linked backup data directory is re
 							"-NoProfile",
 							"-NonInteractive",
 							"-Command",
-							"$ErrorActionPreference='Stop'; $path=[System.IO.StreamReader]::new([Console]::OpenStandardInput(), [System.Text.Encoding]::UTF8).ReadToEnd(); $acl=Get-Acl -LiteralPath $path; $sid=[System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-545'); $rule=[System.Security.AccessControl.FileSystemAccessRule]::new($sid,'Read','Allow'); $acl.AddAccessRule($rule); Set-Acl -LiteralPath $path -AclObject $acl",
+							"$ErrorActionPreference='Stop'; $env:PSModulePath=$env:SKILLREG_TEST_MODULES + ';' + $env:PSModulePath; Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1'); $path=[System.IO.StreamReader]::new([Console]::OpenStandardInput(), [System.Text.Encoding]::UTF8).ReadToEnd(); $acl=Get-Acl -LiteralPath $path; $acl.SetAccessRuleProtection($true,$true); $sid=[System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-545'); $rule=[System.Security.AccessControl.FileSystemAccessRule]::new($sid,'Read','Allow'); $acl.AddAccessRule($rule); Set-Acl -LiteralPath $path -AclObject $acl",
 						],
-						{ input: config, encoding: "utf8" },
+						{
+							input: config,
+							encoding: "utf8",
+							env: { ...process.env, SKILLREG_TEST_MODULES: modules },
+						},
 					);
 	assert.equal(acl.status, 0, acl.stderr);
 	success(run("snapshot", paths));
@@ -315,6 +329,7 @@ test("interruption after activation and before final journal rename is recoverab
 	success(run("snapshot", paths));
 	const { execute } = await import("../scripts/managed-skills-backup-restore.mjs");
 	let renamed = 0;
+	const inventories: { actual: unknown; expected: unknown; label: string }[] = [];
 	assert.throws(
 		() =>
 			execute(
@@ -330,12 +345,37 @@ test("interruption after activation and before final journal rename is recoverab
 				],
 				{
 					afterRename: () => {
-						if (++renamed === 2) throw new Error("interruption after activation");
+						if (++renamed !== 2) return;
+						for (const [home, backup, expected] of [
+							[paths.home, join(paths.root, "activated"), "all"],
+							[join(paths.recovery, "moved"), join(paths.root, "moved-check"), ".skillreg"],
+						]) {
+							execute(["snapshot", "--home", home, "--backup", backup]);
+							const actual = JSON.parse(readFileSync(join(backup, "inventory.json"), "utf8"));
+							const original = JSON.parse(
+								readFileSync(join(paths.backup, "inventory.json"), "utf8"),
+							);
+							inventories.push({
+								actual: actual.entries,
+								expected: original.entries.filter(
+									(entry: { path: string }) =>
+										expected === "all" ||
+										entry.path === expected ||
+										entry.path.startsWith(`${expected}/`),
+								),
+								label: expected === "all" ? "activated" : "retained",
+							});
+						}
+						throw new Error("interruption after activation");
 					},
 				},
 			),
 		/interruption after activation/,
 	);
+	assert.equal(inventories.length, 2);
+	for (const { actual, expected, label } of inventories) {
+		assert.deepEqual(actual, expected, `The ${label} inventory changed during rename`);
+	}
 	success(run("restore", paths, ["--apply", "--recovery", paths.recovery]));
 	const journal = join(paths.recovery, "restore-journal.json");
 	const complete = JSON.parse(readFileSync(journal, "utf8"));

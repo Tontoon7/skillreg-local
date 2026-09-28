@@ -11,6 +11,7 @@ pub fn restrict_to_current_user(path: &Path) -> io::Result<()> {
     let result = Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", r#"
 $ErrorActionPreference = 'Stop'
+Import-Module "$PSHOME\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1"
 $path = $env:SKILLREG_PRIVATE_PATH
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
 $item = Get-Item -LiteralPath $path -Force

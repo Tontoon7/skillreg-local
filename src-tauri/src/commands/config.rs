@@ -300,6 +300,7 @@ mod tests {
             let status = std::process::Command::new("powershell.exe")
                 .args(["-NoProfile", "-NonInteractive", "-Command", r#"
 $ErrorActionPreference = 'Stop'
+Import-Module "$PSHOME\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1"
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 foreach ($path in @($env:SKILLREG_CONFIG_TEST_PATH, (Split-Path -LiteralPath $env:SKILLREG_CONFIG_TEST_PATH))) {
     $acl = Get-Acl -LiteralPath $path

@@ -13,7 +13,7 @@ choisi n’ont pas une preuve applicable au candidat.
 - Candidat : base + diff de cette PR. Les journaux et l’empreinte des sources testées sont
   conservés dans le dossier de sortie de l’étape usine avec `rapport.json`. À la livraison,
   rattacher ces preuves au SHA créé par l’orchestrateur et rejouer la CI sur ce SHA.
-- Session locale reprise et revalidée : 2026-09-28, macOS 26.6.2 (25G83), Darwin arm64, Node 26.8.1, pnpm 9.15.9,
+- Session locale reprise et revalidée : 2026-09-29, macOS 26.6.2 (25G83), Darwin arm64, Node 26.8.1, pnpm 9.15.9,
   Rust/Cargo 1.96.1. La CI choisit Node 22 et reste à exécuter.
 - Aucun vrai agent lancé, aucun trousseau personnel ni donnée de production consulté.
   Les providers réseau et identifiants sont simulés ; les tests utilisent des homes injectés.
@@ -128,7 +128,7 @@ PASS. Cargo `--no-fail-fast` donne 144 PASS et les quatre refus de sockets décr
 Les logs Node, frontend et Rust sont conservés avec le rapport. Revue indépendante du correctif :
 aucun défaut bloquant relevé. Le statut de release reste **NO-GO**.
 
-État courant : **échec Windows non résolu**, run `36405167007`, job `108872050735`
+Échec suivant : **Windows non résolu**, run `36405167007`, job `108872050735`
 (46 PASS / 5 échecs). Le nouvel extrait ne contient toujours aucun bloc d’erreur individuel.
 Le nombre correspond aux cinq tests exigeant une restauration réussie, mais ne prouve ni
 leur identité ni la cause. L’inspection du second clonage, des ACL, des chemins, des inventaires
@@ -163,6 +163,30 @@ refus de sockets décrits en A1.
 Une compilation macOS arm64 locale
 ne complète aucune ligne Windows/Linux/x64. Le compte administrateur du runner Windows ne
 remplace pas N5.
+
+État courant après le run `36498903145`, job `109184823362` : **correctif Windows à rejouer**.
+Le reporter donne désormais deux erreurs précises : chargement impossible du module de
+`Get-Acl` dans la fixture, et inventaire divergent lors de la reprise après activation.
+Les scripts ACL Node et Rust importent explicitement `Microsoft.PowerShell.Security` depuis
+`$PSHOME`, pour ne pas sélectionner un module incompatible via le `PSModulePath` hérité de
+`pwsh`. La fixture ACL place un module homonyme qui échoue au chargement en tête de ce chemin.
+
+La copie des ACL ne demande plus `UNPROTECTED_DACL_SECURITY_INFORMATION` pour les clones
+neufs déjà non protégés : elle écrit la DACL sauvegardée seule, et conserve le flag de
+protection pour les DACL protégées. La comparaison intégrale des descripteurs, contenus et
+modes reste obligatoire. Le test interrompu compare aussi les inventaires activé et conservé
+immédiatement après déplacement ; les assertions restent hors du hook pour conserver leur
+diff en cas d’échec. Le lien causal entre la demande de réhéritage et l’inventaire divergent
+reste une hypothèse à confirmer sur Windows, sans runtime Windows disponible localement.
+Les tests macOS passent aussi avant correction : ce n’est pas une reproduction rouge/verte
+Windows. Aucun workflow, test ou contrôle n’est supprimé ou assoupli ; N1 reste ouverte.
+
+Validation locale de cette correction (`resumed/ci-1-correction`) : format/build et
+`cargo check` PASS, Node **51/51**, Vitest **72/72**. La chaîne bloquante s’arrête sur
+les quatre refus de sockets décrits en A1 ; `cargo test --no-fail-fast` termine avec
+**144 PASS / 4 mêmes échecs**, aucun test ignoré. Journaux : `factory-validation.log`,
+`rust-all.log`, `node-factory-final.log`, `frontend.log`, `cargo-check.log`.
+La reproduction de la commande CI `pnpm test:node` passe aussi (`node-after.log`).
 
 ## N2 — Campagne native isolée et découverte des agents
 
