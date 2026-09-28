@@ -102,7 +102,18 @@ date, architecture, versions Node/Rust, résultat format/build/Node/Vitest/Cargo
 `.github/workflows/ci.yml` doit être entièrement verte. `--no-fail-fast` expose tous les binaires
 Rust ; un échec reste un échec, aucune règle ni test n’est désactivé.
 
-État : **non exécutée**, accès GitHub hors de cette étape. Une compilation macOS arm64 locale
+État : **échec Windows au formatage** dans le run `36402842337`, job `108864527362`
+(journal fourni par l’usine). L’export local avec `core.autocrlf=true` reproduit les 91 erreurs
+Biome dues aux CRLF. `.gitattributes` impose désormais LF aux textes dès le checkout, sans
+modifier le workflow ni assouplir Biome. La matrice doit être rejouée sur le candidat corrigé ;
+les résultats des autres jobs ne sont pas fournis dans cette étape.
+Preuve locale avant/après dans `reprise-1/ci-1-correction` :
+`windows-format-before.log` (91 erreurs), `windows-format-after.log` (91 fichiers, PASS).
+L’export corrigé ne contient plus de CRLF dans `UpdateChecker.tsx` et les icônes PNG restent
+identiques octet par octet. Revalidation locale : format/build PASS, Node 51/51, Vitest 72/72,
+`cargo check` PASS ; Cargo `--no-fail-fast` 144 PASS et les quatre mêmes refus de sockets
+décrits en A1. Revue indépendante du diff : aucun défaut bloquant relevé.
+Une compilation macOS arm64 locale
 ne complète aucune ligne Windows/Linux/x64. Le compte administrateur du runner Windows ne
 remplace pas N5.
 

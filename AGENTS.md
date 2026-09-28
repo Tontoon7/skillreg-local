@@ -80,7 +80,7 @@ Dans l'usine, ne lance jamais `pnpm tauri dev`, `pnpm dev` ou `pnpm tauri build`
 
 - Réponses à Axel en français, commentaires de code en anglais, seulement pour une logique non évidente.
 - TypeScript strict, pas de `any`. Pas de sur-ingénierie.
-- Biome pour le frontend : tabulations, 100 colonnes, imports triés ; `src-tauri/` est exclu. Rust : conventions rustfmt.
+- Biome pour le frontend : tabulations, 100 colonnes, imports triés ; `src-tauri/` est exclu. Rust : conventions rustfmt. `.gitattributes` impose LF aux fichiers texte sur tous les OS et laisse les binaires inchangés.
 - **HTTP uniquement par Rust** : toute requête vers l'API passe par une commande Rust (`reqwest`) appelée via `invoke()` depuis `src/lib/api.ts`. Le frontend ne fait jamais de `fetch` : cela évite les problèmes CORS du webview et garde le réseau et le système de fichiers côté natif. Schéma : `invoke("commande")` → Rust `reqwest` → API → résultat Rust → frontend.
 - Commandes Rust dans `src-tauri/src/commands/`, déclarées dans `commands/mod.rs` et enregistrées dans `lib.rs` ; les commandes legacy renvoient `Result<T, String>` et les nouvelles commandes managed `Result<T, ManagedErrorDto>` (code stable, paramètres filtrés). Les structures échangées avec TypeScript dérivent `Serialize`/`Deserialize` en `camelCase` et restent alignées avec `src/lib/types.ts`.
 - **Publication des commandes** : `publishCommandVersion()` → `publish_command_version` → POST `/api/v1/orgs/{org}/commands/{name}/versions`, avec `version`, `content`, `agentCompatibility` et `scope` explicites, réponse `{ version }`. L'API exige le scope de jeton `write` ou `admin` ; ne pas déduire cette autorisation du rôle d'organisation. Le dialogue reste lié à l'organisation et au nom d'origine, sans retry automatique ni modification des installations locales ; créer une nouvelle commande reste hors de ce parcours.
@@ -122,6 +122,7 @@ Les tickets de ce dépôt sont exécutés par l'usine de développement d'Axel (
 
 ## Pièges connus
 
+- Windows : sans `* text=auto eol=lf` dans `.gitattributes`, un checkout avec `core.autocrlf=true` convertit les sources en CRLF et fait échouer `pnpm format:check`. Reproduire par un export `git -c core.autocrlf=true checkout-index --all --prefix=<dossier-absolu-vide>/`, puis lancer le contrôle dans cet export.
 - `pnpm build` type `src/`, pas `tests/` ni Rust. La validation usine du candidat lance Rust et Node mais oublie Vitest : compléter par `pnpm test:frontend` ; la CI trois OS couvre les trois suites.
 - `cargo check` et `cargo test` compilent `tauri.conf.json`, qui référence `../dist` : lance `pnpm build` avant dans un worktree neuf. Le premier build Rust d'un worktree est long (dépendances Tauri complètes).
 - `src-tauri/src/commands/skills.rs` n'est pas au format rustfmt : `cargo fmt` sur tout le crate reformate du code sans rapport avec le ticket. Formate seulement tes fichiers (`rustfmt --edition 2021 <fichier>`).
