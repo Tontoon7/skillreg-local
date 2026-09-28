@@ -47,7 +47,9 @@ scénario 18 n’a pas un playbook de downgrade vérifié.
 - [x] `installed.json` reste lisible et n’est jamais réécrit par le manifest v2.
 - [x] Une sauvegarde `installed-v1.backup.json` est créée avant la première migration.
 - [x] Les copies projet, externes, manquantes, modifiées ou divergentes restent hors migration.
-- [x] Une opération interrompue restaure son ancien contenu ou signale un rollback impossible.
+- [x] Une opération interrompue restaure son ancien contenu ou signale un rollback impossible :
+  l’état ambigu reste intact, avec statut `ActionRequired` et erreur persistée pour la skill ;
+  les autres skills continuent à être vérifiées et mises à jour (preuve automatique, registre A1).
 - [x] Migration, install, update, repair, uninstall et switch d’organisation partagent un verrou
   global.
 - [ ] Un downgrade complet avec le binaire identifié de la dernière version legacy a été exécuté sur une fixture migrée.

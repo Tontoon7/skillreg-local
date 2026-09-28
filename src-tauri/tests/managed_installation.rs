@@ -14,7 +14,7 @@ use skillreg_local_lib::managed_skills::{
         ManagedRegistryClient, ManagedRegistryFuture, ManagedRegistryRequest, ManagedSkillService,
         ManagedTarget, ManagedTargetPolicy, ManagedWarningCode,
     },
-    AgentId, BindingStatus, LinkKind,
+    AgentId, BindingStatus, LinkKind, ManagedSkillStatus,
 };
 use std::{
     fs,
@@ -464,9 +464,35 @@ async fn interrupted_swap_with_ambiguous_content_preserves_all_evidence() {
     fs::create_dir(&previous).unwrap();
     fs::write(previous.join("SKILL.md"), skill_md("Modified old")).unwrap();
     fs::write(content.join("SKILL.md"), skill_md("Uncommitted new")).unwrap();
-    let manifest = fs::read(paths.manifest_path()).unwrap();
+    let healthy_client = FakeRegistryClient::new(
+        "acme",
+        "publisher",
+        "healthy-helper",
+        "1.0.0",
+        &skill_md("Healthy original").replace("review-helper", "healthy-helper"),
+    );
+    let healthy_service = ManagedSkillService::new(
+        healthy_client.clone(),
+        registry(&[]),
+        SystemPlatformLinker::current(),
+        FileManifestStore,
+        paths.clone(),
+    );
+    let healthy = healthy_service
+        .install(ManagedInstallRequest {
+            name: "healthy-helper".to_string(),
+            ..request("publisher")
+        })
+        .await
+        .unwrap();
+    healthy_client.set_release(
+        "publisher",
+        "2.0.0",
+        &skill_md("Healthy updated").replace("review-helper", "healthy-helper"),
+    );
 
-    for _ in 0..2 {
+    for cycle in 0..2 {
+        let manifest_before_install = fs::read(paths.manifest_path()).unwrap();
         assert_eq!(
             service
                 .install(request("publisher"))
@@ -476,13 +502,17 @@ async fn interrupted_swap_with_ambiguous_content_preserves_all_evidence() {
             ManagedErrorCode::RollbackFailed
         );
         assert_eq!(
-            service
-                .run_managed_updates(true, false, true)
-                .await
-                .unwrap_err()
-                .code(),
-            ManagedErrorCode::RollbackFailed
+            fs::read(paths.manifest_path()).unwrap(),
+            manifest_before_install
         );
+        let summary = healthy_service
+            .run_managed_updates(true, false, true)
+            .await
+            .unwrap();
+        assert_eq!(summary.checked, 2);
+        assert_eq!(summary.action_required, 1);
+        assert_eq!(summary.failed, 0);
+        assert_eq!(summary.updated, if cycle == 0 { 1 } else { 0 });
         assert_eq!(
             fs::read_to_string(previous.join("SKILL.md")).unwrap(),
             skill_md("Modified old")
@@ -491,9 +521,31 @@ async fn interrupted_swap_with_ambiguous_content_preserves_all_evidence() {
             fs::read_to_string(content.join("SKILL.md")).unwrap(),
             skill_md("Uncommitted new")
         );
-        assert_eq!(fs::read(paths.manifest_path()).unwrap(), manifest);
+        let manifest = read_manifest(&paths).unwrap();
+        let ambiguous = &manifest.skills[0];
+        assert_eq!(
+            ambiguous.installation_id,
+            installed.installation.installation_id
+        );
+        assert_eq!(ambiguous.status, ManagedSkillStatus::ActionRequired);
+        assert_eq!(ambiguous.active_version, "1.0.0");
+        assert_eq!(ambiguous.content_hash, installed.installation.content_hash);
+        let error = ambiguous.last_error.as_ref().unwrap();
+        assert_eq!(error.code, ManagedErrorCode::RollbackFailed);
+        assert!(error.parameters.is_empty());
+        assert!(ambiguous.last_checked_at.is_some());
+        assert_eq!(error.occurred_at, ambiguous.last_checked_at);
+        assert_eq!(manifest.skills[1].active_version, "2.0.0");
+        assert!(manifest.skills[1].last_error.is_none());
+        assert_eq!(
+            fs::read_to_string(Path::new(&healthy.installation.content_path).join("SKILL.md"))
+                .unwrap(),
+            skill_md("Healthy updated").replace("review-helper", "healthy-helper")
+        );
     }
     assert_eq!(client.downloads(), 1);
+    assert_eq!(healthy_client.downloads(), 2);
+    assert_eq!(healthy_client.target_checks(), 4);
 }
 
 #[tokio::test]

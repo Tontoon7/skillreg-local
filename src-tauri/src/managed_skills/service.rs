@@ -487,7 +487,8 @@ impl<C: ManagedRegistryClient, A: AgentRegistry, L: PlatformLinker, S: ManagedMa
             if installation.origin == ManagedSkillOrigin::Local {
                 continue;
             }
-            recover_interrupted_swap(
+            summary.checked += 1;
+            if let Err(error) = recover_interrupted_swap(
                 &self.paths,
                 &ManagedInstallRequest {
                     consumer_org: installation.consumer_org.clone(),
@@ -495,8 +496,18 @@ impl<C: ManagedRegistryClient, A: AgentRegistry, L: PlatformLinker, S: ManagedMa
                     name: installation.skill_name.clone(),
                 },
                 &manifest,
-            )?;
-            summary.checked += 1;
+            ) {
+                summary.action_required += 1;
+                update_checked_installation(
+                    &mut manifest,
+                    index,
+                    ManagedSkillStatus::ActionRequired,
+                    current_timestamp(),
+                    Some(error),
+                );
+                self.manifest_store.write(&self.paths, &manifest)?;
+                continue;
+            }
             let content_matches = compute_tree_hash(Path::new(&installation.content_path))
                 .is_ok_and(|hash| hash == installation.content_hash);
             let request = ManagedRegistryRequest {

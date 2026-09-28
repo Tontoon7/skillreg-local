@@ -24,6 +24,9 @@ choisi n’ont pas une preuve applicable au candidat.
 
 Les sorties finales, compteurs et restrictions sont consignés après exécution dans ce tableau.
 `PASS local` ne signifie jamais PASS Windows, Linux, lecteur d’écran ou agent réel.
+Après correction de revue, A1–A4 ont été rejoués sur `ca96678783c941951ac55f9494bc7877af7ec9d4`
+avec le diff de correction : mêmes résultats ci-dessous, journaux dans la sortie
+`reprise-1/review-1-correction`. A5 reste l’inspection de l’étape précédente.
 
 | ID | Commande / inspection | Résultat courant et portée |
 | --- | --- | --- |
@@ -61,6 +64,13 @@ Rust ; pas de profil personnel. Aucun serveur de développement ni packaging com
   (`available = 0`, attendu 1), puis passe après récupération sous verrou avant ce contrôle,
   en automatique et en manuel avec auto-update OFF. L’état ambigu reste intact et signalé.
   Suite `managed_installation` : 17/17 PASS ; preuve `managed-recovery-red-green.txt`.
+- Correction après revue : l’erreur de récupération interrompait encore le cycle complet.
+  Le test à deux skills échoue d’abord sur `RollbackFailed` (`recovery-red.log`), puis
+  passe avec la suite `managed_installation` : **17/17 PASS** (`recovery-green.log`).
+  Sur deux cycles successifs, la skill ambiguë conserve `content`, `previous`, version et hash,
+  reçoit `ActionRequired`, l’erreur structurée et l’horodatage persistés ; la seconde skill
+  est vérifiée et mise à jour une seule fois. L’installation explicite de la skill ambiguë
+  échoue toujours sans modifier le manifeste. Un échec de persistance reste une erreur globale.
 - Dialogue : les tests échouaient sur l’absence de `showModal` et de cancel natif ; le retour de
   focus après disparition du menu révélait un second défaut. Tests corrigés avec le composant,
   sans remplacer la modalité native par un piège de focus artisanal.
