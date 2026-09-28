@@ -127,7 +127,7 @@ public static class ProfileAcl {
   }
 }
 '@
-$requests = [Console]::In.ReadToEnd() | ConvertFrom-Json
+$requests = [System.IO.StreamReader]::new([Console]::OpenStandardInput(), [System.Text.Encoding]::UTF8).ReadToEnd() | ConvertFrom-Json
 $results = @($requests | ForEach-Object {
   $replacement = $_.acl
   if ($replacement -eq 'private') {
@@ -206,7 +206,7 @@ function inventory(base) {
 						"-NoProfile",
 						"-NonInteractive",
 						"-Command",
-						"$ErrorActionPreference='Stop'; (Get-Item -Force -LiteralPath ([Console]::In.ReadToEnd())).LinkType",
+						"$ErrorActionPreference='Stop'; $path=[System.IO.StreamReader]::new([Console]::OpenStandardInput(), [System.Text.Encoding]::UTF8).ReadToEnd(); (Get-Item -Force -LiteralPath $path).LinkType",
 					],
 					absolute,
 				);

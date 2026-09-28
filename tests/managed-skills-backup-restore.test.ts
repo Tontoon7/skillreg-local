@@ -285,7 +285,7 @@ test("ACL metadata survives restoration and a linked backup data directory is re
 							"-NoProfile",
 							"-NonInteractive",
 							"-Command",
-							"$ErrorActionPreference='Stop'; $path=[Console]::In.ReadToEnd(); $acl=Get-Acl -LiteralPath $path; $sid=[System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-545'); $rule=[System.Security.AccessControl.FileSystemAccessRule]::new($sid,'Read','Allow'); $acl.AddAccessRule($rule); Set-Acl -LiteralPath $path -AclObject $acl",
+							"$ErrorActionPreference='Stop'; $path=[System.IO.StreamReader]::new([Console]::OpenStandardInput(), [System.Text.Encoding]::UTF8).ReadToEnd(); $acl=Get-Acl -LiteralPath $path; $sid=[System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-545'); $rule=[System.Security.AccessControl.FileSystemAccessRule]::new($sid,'Read','Allow'); $acl.AddAccessRule($rule); Set-Acl -LiteralPath $path -AclObject $acl",
 						],
 						{ input: config, encoding: "utf8" },
 					);

@@ -102,7 +102,7 @@ date, architecture, versions Node/Rust, résultat format/build/Node/Vitest/Cargo
 `.github/workflows/ci.yml` doit être entièrement verte. `--no-fail-fast` expose tous les binaires
 Rust ; un échec reste un échec, aucune règle ni test n’est désactivé.
 
-État : **échec Windows au formatage** dans le run `36402842337`, job `108864527362`
+Premier échec : **Windows au formatage** dans le run `36402842337`, job `108864527362`
 (journal fourni par l’usine). L’export local avec `core.autocrlf=true` reproduit les 91 erreurs
 Biome dues aux CRLF. `.gitattributes` impose désormais LF aux textes dès le checkout, sans
 modifier le workflow ni assouplir Biome. La matrice doit être rejouée sur le candidat corrigé ;
@@ -113,6 +113,21 @@ L’export corrigé ne contient plus de CRLF dans `UpdateChecker.tsx` et les ic�
 identiques octet par octet. Revalidation locale : format/build PASS, Node 51/51, Vitest 72/72,
 `cargo check` PASS ; Cargo `--no-fail-fast` 144 PASS et les quatre mêmes refus de sockets
 décrits en A1. Revue indépendante du diff : aucun défaut bloquant relevé.
+
+État courant : **échec Windows des helpers Node**, run `36404147565`, job `108868714172`
+(43 PASS / 8 échecs). L’extrait fourni ne contient pas les erreurs individuelles.
+L’inspection identifie trois lectures stdin PowerShell sans encodage explicite, alors que Node
+transmet de l’UTF-8 : inventaire ACL, détection des junctions et préparation ACL du test.
+Le profil `profil été` expose ce défaut ; huit tests de rollback exigent un snapshot réussi,
+les deux autres s’arrêtent avant ces lectures. Les trois lectures utilisent désormais
+`StreamReader(Console.OpenStandardInput(), Encoding.UTF8)` ; les assertions et le profil
+accentué sont conservés. Aucun workflow ni contrôle modifié. Le diagnostic doit encore être
+confirmé par le prochain run Windows : aucun runtime Windows n’est disponible localement.
+Dans `reprise-1/ci-2-correction`, `pnpm test:node` passe 51/51 et Vitest 72/72 ; format/build
+PASS. Cargo `--no-fail-fast` donne 144 PASS et les quatre refus de sockets décrits en A1.
+Les logs Node, frontend et Rust sont conservés avec le rapport. Revue indépendante du correctif :
+aucun défaut bloquant relevé. Le statut de release reste **NO-GO**.
+
 Une compilation macOS arm64 locale
 ne complète aucune ligne Windows/Linux/x64. Le compte administrateur du runner Windows ne
 remplace pas N5.
