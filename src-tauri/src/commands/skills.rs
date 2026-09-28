@@ -3,6 +3,7 @@ use super::config::read_config;
 use super::installed_manifest::{
     remove_tracked_installation, upsert_tracked_installation, TrackedInstallation,
 };
+use crate::managed_skills::{paths::ManagedPaths, service::acquire_managed_mutation_lock};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -266,14 +267,10 @@ pub async fn pull_skill(
 /// Only plain relative components are allowed: this rules out absolute paths,
 /// Windows drive prefixes, and any `..` traversal.
 pub(crate) fn is_safe_entry_path(path: &std::path::Path) -> bool {
-    use std::path::Component;
-
-    if path.as_os_str().is_empty() {
-        return false;
-    }
-
-    path.components()
-        .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
+    crate::managed_skills::archive::is_safe_archive_path(
+        path,
+        crate::managed_skills::archive::ArchiveLimits::default(),
+    )
 }
 
 pub async fn install_skill_from_registry(
@@ -400,6 +397,9 @@ async fn install_verified_tarball(
     project_dir: Option<String>,
     source_org: Option<String>,
 ) -> Result<InstallResult, String> {
+    let _guard = acquire_managed_mutation_lock().await;
+    let paths = ManagedPaths::from_home().map_err(|error| error.to_string())?;
+    ensure_legacy_mutation_allowed(scope, &paths.manifest_path())?;
     let name = name.to_string();
     let org = org.to_string();
     let agent = agent.to_string();
@@ -752,12 +752,15 @@ fn get_install_path(
 }
 
 #[tauri::command]
-pub fn uninstall_skill(
+pub async fn uninstall_skill(
     name: String,
     agent: String,
     scope: String,
     project_dir: Option<String>,
 ) -> Result<bool, String> {
+    let _guard = acquire_managed_mutation_lock().await;
+    let paths = ManagedPaths::from_home().map_err(|error| error.to_string())?;
+    ensure_legacy_mutation_allowed(&scope, &paths.manifest_path())?;
     let path = get_install_path(&agent, &scope, &name, project_dir.as_deref())?;
     if !path.exists() {
         return Ok(false);
@@ -1038,17 +1041,108 @@ fn urlencoded(s: &str) -> String {
         .replace('+', "%2B")
 }
 
+fn ensure_legacy_mutation_allowed(scope: &str, managed_manifest: &std::path::Path) -> Result<(), String> {
+    if scope != "user" {
+        return Ok(());
+    }
+    match fs::symlink_metadata(managed_manifest) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(_) => Err("Managed user skills must be changed through the managed commands".to_string()),
+        Err(_) => Err("Managed skill state cannot be verified".to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ensure_skill_md_version, is_safe_entry_path};
+    use super::{
+        ensure_skill_md_version, is_safe_entry_path, CatalogPolicy, PaginatedCatalogSkills,
+    };
     use std::path::Path;
+
+    #[test]
+    fn legacy_user_mutations_are_refused_after_managed_adoption_but_project_scope_remains_available() {
+        let root = std::env::temp_dir().join(format!("skillreg-legacy-guard-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let manifest = root.join("managed-skills.json");
+        assert!(super::ensure_legacy_mutation_allowed("user", &manifest).is_ok());
+        std::fs::write(&manifest, "invalid v2 state must also stay protected").unwrap();
+        assert!(super::ensure_legacy_mutation_allowed("user", &manifest).is_err());
+        assert!(super::ensure_legacy_mutation_allowed("project", &manifest).is_ok());
+        assert_eq!(std::fs::read_to_string(&manifest).unwrap(), "invalid v2 state must also stay protected");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    // Payloads captured from the production API. These guard the deserialization
+    // contract: a renamed or dropped field breaks the desktop catalog silently
+    // otherwise, since serde ignores unknown keys.
+    #[test]
+    fn parses_the_live_catalog_policy_payload() {
+        let payload = r#"{
+            "mode": "validated_only",
+            "minimumValidationLevel": "verified",
+            "allowFirstParty": true,
+            "allowlist": [],
+            "canInstallFromCatalog": true
+        }"#;
+
+        let policy: CatalogPolicy = serde_json::from_str(payload).unwrap();
+
+        assert_eq!(policy.mode, "validated_only");
+        assert_eq!(policy.minimum_validation_level, "verified");
+        assert!(policy.allow_first_party);
+        assert!(policy.can_install_from_catalog);
+    }
+
+    #[test]
+    fn parses_the_live_public_skills_payload() {
+        let payload = r#"{
+            "skills": [{
+                "name": "claude-md",
+                "description": "Build and maintain a CLAUDE.md",
+                "tags": ["context"],
+                "orgSlug": "skillreg",
+                "orgName": "SkillReg",
+                "isFirstParty": true,
+                "latestVersion": "1.0.0",
+                "totalDownloads": 3,
+                "totalVersions": 1,
+                "isDeprecated": false,
+                "deprecatedMessage": null,
+                "installCommand": "skillreg pull @skillreg/claude-md",
+                "updatedAt": "2026-07-20T14:30:16.296Z",
+                "version": {},
+                "validation": {
+                    "level": "verified", "score": 100,
+                    "passed": 13, "warned": 0, "failed": 0
+                }
+            }],
+            "pagination": {
+                "page": 1, "limit": 1, "total": 1,
+                "totalPages": 1, "hasNext": false, "hasPrev": false
+            }
+        }"#;
+
+        let parsed: PaginatedCatalogSkills = serde_json::from_str(payload).unwrap();
+        let skill = &parsed.skills[0];
+
+        assert_eq!(skill.name, "claude-md");
+        assert_eq!(skill.org_slug, "skillreg");
+        assert!(skill.is_first_party);
+        assert_eq!(skill.validation.level, "verified");
+        assert_eq!(skill.validation.passed, 13);
+        assert_eq!(parsed.pagination.total, 1);
+    }
 
     #[test]
     fn accepts_ordinary_relative_entry_paths() {
         assert!(is_safe_entry_path(Path::new("SKILL.md")));
         assert!(is_safe_entry_path(Path::new("my-skill/SKILL.md")));
-        assert!(is_safe_entry_path(Path::new("./scripts/run.sh")));
         assert!(is_safe_entry_path(Path::new("docs/v1.2..3/notes.md")));
+    }
+
+    #[test]
+    fn rejects_ambiguous_current_directory_components() {
+        assert!(!is_safe_entry_path(Path::new("./scripts/run.sh")));
     }
 
     #[test]

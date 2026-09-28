@@ -1,0 +1,258 @@
+# Validation du candidat skills gérées
+
+La [checklist](plans/2026-07-29-managed-skills-release-checklist.md) porte la décision de
+release. Ce registre distingue les preuves automatisées locales des campagnes natives et
+externes. **NO-GO dogfood et activation générale** tant que les obligations du périmètre
+choisi n’ont pas une preuve applicable au candidat.
+
+## Candidat et environnement
+
+- Base : `793ba1b390aae6c90030a1061ca805bd3c6c32fd`, version 0.3.25 inchangée.
+- Socle repris par patches ciblés : `bbfbe94df75a472221733374cfac8170e836e011`, delta depuis
+  `3e024f35e721313dc88ce4496765853c800d4ec1`. Publication des commandes de la base conservée.
+- Candidat : base + diff de cette PR. Les journaux et l’empreinte des sources testées sont
+  conservés dans le dossier de sortie de l’étape usine avec `rapport.json`. À la livraison,
+  rattacher ces preuves au SHA créé par l’orchestrateur et rejouer la CI sur ce SHA.
+- Session locale reprise et revalidée : 2026-09-28, macOS 26.6.2 (25G83), Darwin arm64, Node 26.8.1, pnpm 9.15.9,
+  Rust/Cargo 1.96.1. La CI choisit Node 22 et reste à exécuter.
+- Aucun vrai agent lancé, aucun trousseau personnel ni donnée de production consulté.
+  Les providers réseau et identifiants sont simulés ; les tests utilisent des homes injectés.
+- Résultats du 2026-07-29 : historiques seulement, rapportés par la branche source sans
+  empreinte de binaire. Ne pas les recopier comme PASS du candidat.
+
+## Registre des preuves automatiques
+
+Les sorties finales, compteurs et restrictions sont consignés après exécution dans ce tableau.
+`PASS local` ne signifie jamais PASS Windows, Linux, lecteur d’écran ou agent réel.
+
+| ID | Commande / inspection | Résultat courant et portée |
+| --- | --- | --- |
+| A1 | `pnpm format:check && pnpm build && cargo test --manifest-path src-tauri/Cargo.toml --locked && node --test --experimental-strip-types tests/*.test.ts` | **Format et build PASS ; Cargo 89 unitaires PASS / 4 échecs socket sandbox, code 101.** La chaîne s’arrête avant Node. Exécution complète `--no-fail-fast` : **144 PASS / 4 mêmes échecs**, aucun test ignoré. Node lancé séparément : **51/51 PASS**. Voir `factory-validation.log`, `rust-validation.log`, `node-validation.log`. |
+| A2 | `pnpm test:frontend` | **72/72 PASS, 18 fichiers**, DOM jsdom/IPC simulé seulement ; `frontend-validation.log`. |
+| A3 | `cargo check --manifest-path src-tauri/Cargo.toml --locked` | **PASS**, `cargo-check.log`, compilation macOS arm64 uniquement. |
+| A4 | `bash scripts/check-release-notarization.sh` | **PASS**, présence des commandes, pas notarisation réelle ; sortie « Release workflow contains macOS notarization hooks. ». |
+| A5 | Erreurs synthétiques, recherche Sentry, inspection de `dist/` | **PASS local limité** : tests synthétiques frontend/Rust verts ; 6 fichiers `dist/`, 0 sourcemap, 0 détection de valeur token/clé privée/URL signée/chemin personnel/fixture. Aucune intégration Sentry trouvée dans sources et dépendances. `privacy-inspection.json` ; aucune inspection de service externe. |
+
+Les quatre échecs sont ceux de `commands::slash_commands::tests` :
+`invalid_publication_inputs_send_no_requests`, `publication_http_errors_are_contextual_and_never_retried`,
+`publication_invalid_response_is_distinct_from_network_failure` et
+`publishes_raw_content_with_encoded_segments_and_explicit_metadata`. Tous s’arrêtent à
+`src-tauri/src/commands/slash_commands.rs:900`, `TcpListener::bind("127.0.0.1:0")`,
+`Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }`.
+Ce module est inchangé. Aucun test n’a été désactivé ni passé en skip. Le moteur doit rejouer
+la validation avec ses sockets autorisées ; le résultat n’est pas un PASS complet local.
+Les tests Windows exécutent **0 cas** sur macOS et ne prouvent rien sur NTFS.
+
+Pour reproduire, installer les lockfiles (`pnpm install --frozen-lockfile`, `cargo fetch --locked
+--manifest-path src-tauri/Cargo.toml`) et construire `dist/` avant Cargo, sur **chaque** OS.
+Node 22 récent est installé en CI ; les tests UI utilisent Vitest/Testing Library déjà retenus
+par le socle. Le script de sauvegarde demande les outils ACL natifs : macOS `ls`/`chmod`, Linux
+`getfacl`/`setfacl` (paquet `acl`), Windows PowerShell/.NET. Ne pas contourner un refus ACL.
+En usine, définir `TMPDIR` vers un dossier de fixtures dans la sortie de l’étape avant les tests
+Rust ; pas de profil personnel. Aucun serveur de développement ni packaging complet.
+
+### Reproduction avant correction
+
+- Reprise interrompue : manifeste ancien + nouveau `content` + ancien `previous` provoquait
+  `ContentModified` après suppression de `previous`. L’état ambigu perdait aussi sa copie.
+  Les tests passent ensuite par le vrai chemin du service, avec hash committé et reprise répétée.
+- Revue de reprise : le cycle de mises à jour vérifiait le hash avant de récupérer le swap,
+  classant à tort une interruption en contenu modifié. Le nouveau test échoue d’abord
+  (`available = 0`, attendu 1), puis passe après récupération sous verrou avant ce contrôle,
+  en automatique et en manuel avec auto-update OFF. L’état ambigu reste intact et signalé.
+  Suite `managed_installation` : 17/17 PASS ; preuve `managed-recovery-red-green.txt`.
+- Dialogue : les tests échouaient sur l’absence de `showModal` et de cancel natif ; le retour de
+  focus après disparition du menu révélait un second défaut. Tests corrigés avec le composant,
+  sans remplacer la modalité native par un piège de focus artisanal.
+- Release : les tests de configuration échouaient sur l’absence de CI et les anciens suffixes
+  updater ; les tests du helper échouaient avant sa création. Le helper valide les quatre
+  plateformes avant de produire la sortie et associe chaque artefact à sa propre signature.
+- Sauvegarde : tests ajoutés avant le script, puis fixture migrée par le vrai moteur Rust ;
+  aucun helper de test ne réimplémente la restauration.
+
+### Cartographie des 21 scénarios
+
+| Scénarios checklist | Suites et limites |
+| --- | --- |
+| 1–3, 8–10 | `managed_installation` : agents simulés, erreurs provider, checksum et interruptions autour du commit. Aucun vrai téléchargement. |
+| 4–7 | `managed_bindings`, `managed_uninstall`, `Dashboard.test.tsx` : ownership et réconciliation, pas découverte runtime. |
+| 11 | Tests `archive` : traversal, liens et archives malveillantes ; fixtures suffisantes pour ce contrôle. |
+| 12–13 | `managed_installation`, `auto_update`, `Dashboard.test.tsx` : ON/OFF/manuel, occupé, erreur et réessai. |
+| 14–16 | `managed_migration` : copies identiques/modifiées/projets/liens externes ; le CLI externe reste à tester. |
+| 17 | `active_org_reconcile`, tests config/store : cache, conflit, autorisation et rollback. |
+| 18 | `managed_release_rollback` + `managed-skills-backup-restore.test.ts` : protocole filesystem réel ; binaire legacy absent. |
+| 19 | Tests config/env et `managed_windows_permissions` sur Windows : protection locale ; deux utilisateurs OS réels encore nécessaires. |
+| 20 | Fixtures Unicode/espaces dans liens/import/rollback ; N2/N5 doivent confirmer dans les vrais agents. |
+| 21 | `local_skill_import`, `LocalSkillImportPanel.test.tsx` : doublons, externe, import idempotent. |
+
+## N1 — CI du candidat
+
+Après livraison du code par l’orchestrateur, conserver pour chaque OS : SHA testé, URL du run,
+date, architecture, versions Node/Rust, résultat format/build/Node/Vitest/Cargo. La matrice de
+`.github/workflows/ci.yml` doit être entièrement verte. `--no-fail-fast` expose tous les binaires
+Rust ; un échec reste un échec, aucune règle ni test n’est désactivé.
+
+État : **non exécutée**, accès GitHub hors de cette étape. Une compilation macOS arm64 locale
+ne complète aucune ligne Windows/Linux/x64. Le compte administrateur du runner Windows ne
+remplace pas N5.
+
+## N2 — Campagne native isolée et découverte des agents
+
+Exécuter les scénarios 1–21 dans un compte OS de test dédié, avec un profil sauvegardé selon N4,
+des organisations et accès factices, et le build candidat identifié par empreinte. L’application
+native résout le home de ce compte ; ne pas la lancer sur un profil personnel existant.
+Utiliser `src-tauri/tests/fixtures/agents/runtime-probe/SKILL.md` comme sentinelle.
+
+1. Préparer successivement 0, 1 puis 3 agents ; relever leur commande/version exacte et créer
+   la racine de skills avant un premier démarrage, puis tester sa création après démarrage.
+2. Installer la sentinelle via le candidat ; constater dans chaque agent sa découverte et la
+   réponse `SKILLREG_RUNTIME_PROBE_OK`. Tester apparition à chaud et après redémarrage séparément.
+3. Ajouter puis retirer un agent ; rouvrir l’accueil, vérifier la réconciliation et les états.
+4. Rejouer les conflits homonymes physiques/externes, checksum, archives, interruption réseau
+   simulée et crash avant/après commit. Comparer inventaires avant/après et les données protégées.
+5. Rejouer OFF → vérification → mise à jour manuelle, ON, migration identique/modifiée, projet CLI,
+   import local, changement d’entreprise et profil avec espaces/Unicode. Vérifier l’absence
+   de bindings simultanés de deux entreprises et la conservation des accès après désinstallation.
+6. Conserver uniquement erreurs structurées/codes et captures expurgées. Ne pas exporter config,
+   token, variables, URL signée, prompts ou contenu privé dans le rapport.
+
+Pour chaque ligne : SHA/empreinte, OS/architecture, filesystem, version agent, chemin relatif,
+type de lien, redémarrage requis, résultat, preuve expurgée, limites. Les tests Rust utilisent
+des faux agents et ne remplacent pas ce relevé. macOS x64, Windows et Linux restent désactivés
+jusqu’à validation propre de leurs adaptateurs.
+
+État : **non exécutée sur le candidat**. Aucun résultat historique importé comme preuve actuelle.
+
+## N3 — Accessibilité et affichage natifs
+
+Dans la webview du candidat, parcourir login/setup/entreprise/catalogue/détail/accueil/Mes skills/
+accès/import/réparation/désinstallation au clavier uniquement. Tab/Shift+Tab restent dans les
+dialogues modaux ; le fond est inerte ; le focus initial est non destructif et revient au
+déclencheur. Échap ferme hors opération ; une opération en cours ne peut pas être interrompue
+par une fermeture qui masque son résultat. Vérifier erreur, réessai, état occupé et double clic.
+
+Avec VoiceOver sur macOS (et lecteur propre aux autres plateformes activées), relever noms,
+rôles, états et annonces d’erreur/résultat. Vérifier zoom, texte long et fenêtres 900×600,
+standard et maximisée. Mesurer texte normal ≥4,5:1 et indicateurs/focus ≥3:1 sur les couleurs
+**effectivement composées** dans la webview, notamment hover/disabled/backdrop.
+
+Mesure statique des tokens sombres avant campagne : texte/fond 16,13:1 ; texte secondaire/carte
+5,67:1 ; texte principal/bouton primaire 9,05:1 ; erreur/carte 4,91:1. Le bouton de confirmation
+destructif utilise désormais blanc sur rouge 700 (~6,47:1). Ces mesures ne prouvent ni la webview,
+ni la transparence des focus, ni les petits contrôles. La bordure carte seule est à 1,39:1 :
+ne pas l’utiliser comme seule indication d’un contrôle interactif sans vérification native.
+
+Le dépôt ne définit aucune palette `.light` et Settings n’offre actuellement pas de bascule.
+L’ancienne mention de thème clair dans le guide était périmée. Le périmètre reste sombre ; une
+exigence clair/sombre doit être résolue explicitement avant GO, sans inventer un test clair.
+
+État : **tests DOM locaux seulement ; campagne native non exécutée**.
+
+## N4 — Sauvegarde, restauration et downgrade de release
+
+Outil interne unique, sans réseau ni home implicite. Employer des chemins absolus explicites,
+un profil isolé, une sauvegarde **neuve hors du profil**, puis un dossier de récupération distinct.
+Les exemples suivants désignent des fixtures à préparer, jamais un vrai home par défaut :
+
+```sh
+node scripts/managed-skills-backup-restore.mjs snapshot --home /fixtures/profil --backup /fixtures/avant-migration
+node scripts/managed-skills-backup-restore.mjs verify --home /fixtures/profil --backup /fixtures/avant-migration
+node scripts/managed-skills-backup-restore.mjs restore --home /fixtures/profil --backup /fixtures/avant-migration
+node scripts/managed-skills-backup-restore.mjs restore --home /fixtures/profil --backup /fixtures/avant-migration --apply --recovery /fixtures/avant-restauration
+```
+
+En usine, placer `/fixtures` dans le dépôt ou le dossier de sortie. Fermer d’abord SkillReg,
+les agents et toute écriture dans la fixture. Les racines sauvegardées sont `.skillreg`,
+`.claude`, `.codex`, `.cursor`, `.agents`, intégralement, avec fichiers, modes/ACL et liens
+sans déréférencement. Les projets et cibles externes ne sont jamais restaurés à travers un lien.
+Une propriété non préservable ou une sauvegarde altérée provoque un refus avant mutation.
+`verify` vérifie la sauvegarde ; il n’exige pas que le profil migré soit encore identique.
+La récupération doit résider sur le même filesystem que le profil (renames atomiques). Les
+ancêtres sont canonisés, puis les chemins réels comparés ; les liens directs vers un profil,
+une sauvegarde/récupération et leurs dossiers de données sont refusés, ainsi que les racines de
+volume. Les symlinks Windows et les ACL portées par des symlinks macOS sont refusés plutôt que
+copiés imparfaitement ; les junctions Windows disposent de leur propre traitement sans suivre
+leur cible. Une interruption avant création du journal ne modifie pas le profil : conserver la
+récupération incomplète et utiliser un nouveau chemin après contrôle du profil. La reprise
+après interruption de processus autour des swaps est testée ; aucune résistance à une coupure
+électrique Windows n’est revendiquée.
+
+Protocole complet obligatoire :
+
+1. Identifier le **dernier binaire legacy réellement distribué** : version, architecture, origine
+   et SHA-256. Le numéro commun 0.3.25 n’identifie pas ce binaire. Aucun artefact legacy n’est
+   fourni dans ce dépôt ; le HEAD de base est une source de code, pas une preuve binaire.
+2. Dans le profil isolé, créer copies legacy identiques/modifiées, copie projet, lien externe,
+   accès factices et plusieurs agents. Inventorier contenus/liens/modes/ACL et données externes.
+3. Exécuter snapshot puis verify **avant migration**. Migrer avec le vrai moteur, mettre à jour,
+   créer un ajout postérieur à la sauvegarde et conserver un inventaire après migration.
+4. Fermer tous les processus, examiner restore sans `--apply`, puis appliquer avec `--recovery`.
+   L’état post-migration reste dans cette récupération ; ne pas le supprimer. Après interruption,
+   relancer exactement la même commande et le même dossier de récupération. Un état non
+   vérifiable est refusé, sans suppression silencieuse.
+5. Comparer les fichiers protégés, manifestes, accès factices, liens et permissions/ACL avec la
+   sauvegarde. Vérifier les projets et cibles externes intacts. L’outil restaure au point de
+   sauvegarde et **ne fusionne pas** automatiquement les ajouts postérieurs.
+6. Démarrer le binaire legacy identifié dans ce compte isolé, lire les installations puis réaliser
+   une opération legacy locale sur la sentinelle. Refaire l’inventaire et contrôler les accès.
+7. Rejouer sauvegarde incomplète, fichier changé, lien ancêtre, restauration interrompue ; consigner
+   refus et récupération. Le test Rust prouve les étapes filesystem par vraie migration/MAJ,
+   puis appelle le script Node ; il ne simule pas le binaire legacy.
+
+Les trousseaux OS ne sont pas exportés : les accès réels y restent conservés. La fixture utilise
+des valeurs factices dans les fichiers protégés et les suites env utilisent le backend mémoire.
+Le maintien des accès trousseau avec le binaire legacy relève de l’étape native.
+
+État : **protocole filesystem automatisé ; binaire legacy et exécution native manquants**.
+Sans sauvegarde complète antérieure, aucun downgrade supporté ; pas d’autorisation générale.
+
+## N5 — Windows : NTFS et profil standard
+
+Exécuter dans un compte Windows standard dédié **sans élévation**, sur NTFS :
+
+```sh
+pnpm install --frozen-lockfile
+pnpm build
+cargo test --manifest-path src-tauri/Cargo.toml --locked --test managed_windows_permissions -- --nocapture
+cargo test --manifest-path src-tauri/Cargo.toml --locked --test managed_migration --test managed_bindings --test local_skill_import --test managed_release_rollback
+```
+
+Consigner statut d’élévation et filesystem avec le résultat. Vérifier création/suppression de
+junctions sans privilège symlink, cible conservée, nom espaces/Unicode, conflit de cible et
+interdiction d’écriture. Comparer ACL effectives de `.skillreg`, config et manifeste avant/après
+remplacement atomique ; tester héritage trop large et refus de durcissement, ancien fichier intact.
+Une seconde session OS ne doit lire ni modifier ces fichiers. Ne changer aucun compte ni ACL
+système pour faire passer ces tests : seules les fixtures reçoivent des ACL locales.
+
+État : **non exécuté ici** ; les tests réservés Windows ne tournent pas sur macOS. Un run vert
+administrateur ne coche pas cette gate.
+La suite actuelle couvre héritage trop large, remplacement privé, refus d’une junction étrangère
+et création de junction interdite. Le refus effectif de `Set-Acl` pendant le durcissement, avec
+ancien manifeste/config intacts, reste à reproduire dans ce profil standard ; le refus d’une
+junction ne constitue pas cette preuve.
+
+## N6 / N7 — Autres surfaces, release et observation
+
+App/CLI/site : fournir versions/révisions et résultats de tests des dépôts correspondants.
+Vérifier contrat API desktop, validation serveur et checksum, onboarding
+`/onboarding?source=desktop`, téléchargement cohérent, CLI utilisateur refusant de muter v2,
+CLI projet préservé et publication de commandes avec scope token `write`/`admin` conservée.
+Les suites desktop n’attestent pas ces surfaces externes.
+
+Release : sans déclencher le workflow pendant cette étape, contrôler après livraison les
+signatures OS et updater, notarisation/agrafage DMG, SHA-256 des artefacts livrés et vrai update
+depuis la stable précédente. Le helper choisit `.app.tar.gz` macOS, NSIS `.exe` Windows et
+`.AppImage` Linux ; toute plateforme/signature manquante refuse la génération, avant création
+du brouillon. Ses tests factices ne vérifient pas cryptographiquement une signature réelle.
+
+Inspecter bundles/sourcemaps/logs CI/release expurgés. Sentry n’est pas intégré au desktop :
+aucun package, initialisation ou transport dans `src`, `src-tauri/src` et leurs manifestes.
+Cette ligne est non applicable au desktop ; app/site restent à vérifier séparément.
+
+Dogfood uniquement après ses propres gates, cohorte Kairia signée, puis observation à 72 h,
+design partners volontaires et revue J+7 (installations/mises à jour, actions requises, erreurs,
+migrations partielles). Conserver le lecteur v1 une version stable supplémentaire ; retrait
+legacy séparé. Relevés manuels locaux expurgés ; aucune télémétrie de contenu/usage.
+
+État : **preuves externes absentes**. Ces étapes ne sont ni réalisées ni remplacées par une
+procédure écrite dans cette PR. Aucune action GitHub ou publication n’est demandée à l’agent.

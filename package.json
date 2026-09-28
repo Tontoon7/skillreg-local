@@ -6,12 +6,15 @@
 	"scripts": {
 		"dev": "vite",
 		"build": "tsc && vite build",
-		"test": "node --test --experimental-strip-types tests/*.test.ts",
 		"preview": "vite preview",
 		"tauri": "tauri",
 		"tauri:build:local": "tauri build --config src-tauri/tauri.local.conf.json",
 		"format": "biome check --write .",
-		"format:check": "biome check ."
+		"format:check": "biome check .",
+		"test": "pnpm test:node && pnpm test:frontend",
+		"test:node": "node --test --experimental-strip-types tests/*.test.ts",
+		"test:frontend": "vitest run",
+		"test:watch": "vitest"
 	},
 	"dependencies": {
 		"@tauri-apps/api": "^2.11.1",
@@ -35,12 +38,17 @@
 		"@biomejs/biome": "^1.9.4",
 		"@tailwindcss/vite": "^4.0.0",
 		"@tauri-apps/cli": "^2.11.4",
+		"@testing-library/jest-dom": "^7.0.0",
+		"@testing-library/react": "^16.3.2",
+		"@testing-library/user-event": "^14.6.1",
 		"@types/react": "^19.0.0",
 		"@types/react-dom": "^19.0.0",
 		"@vitejs/plugin-react": "^4.3.0",
+		"jsdom": "^30.0.0",
 		"tailwindcss": "^4.0.0",
 		"typescript": "^5.7.0",
-		"vite": "^6.4.3"
+		"vite": "^6.4.3",
+		"vitest": "^4.1.10"
 	},
 	"pnpm": {
 		"overrides": {

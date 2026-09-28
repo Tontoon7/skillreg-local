@@ -55,13 +55,17 @@ skillreg-local/
 │   ├── src/
 │   │   ├── main.rs             ← Entry point Tauri
 │   │   ├── lib.rs              ← App setup, tray icon, command registration
+│   │   ├── managed_skills/     ← Canonical content, manifest v2, transactions, bindings, migration/import
 │   │   ├── commands/           ← Tauri commands (invoked from frontend)
 │   │   │   ├── mod.rs          ← Module exports (including slash_commands)
 │   │   │   ├── auth.rs         ← login_initiate, login_poll, login_with_token, whoami, logout, open_url
 │   │   │   ├── skills.rs       ← list_skills, get_skill, search_skills, pull_skill, push_skill, uninstall_skill, delete_skill, check_updates
 │   │   │   ├── slash_commands.rs ← slash command registry, install, update, remove, publish version
 │   │   │   ├── local.rs        ← scan_local_skills, parse_frontmatter
-│   │   │   ├── config.rs       ← read_config, write_config
+│   │   │   ├── managed_skills.rs ← managed lifecycle and safe DTOs
+│   │   │   ├── managed_migration.rs ← opt-in legacy migration and repair
+│   │   │   ├── local_import.rs ← preview/run local import
+│   │   │   ├── config.rs       ← atomic private read_config/write_config
 │   │   │   └── env.rs          ← EnvStore org-level + legacy env commands
 │   ├── Cargo.toml
 │   ├── tauri.conf.json
@@ -71,12 +75,12 @@ skillreg-local/
 │   ├── main.tsx                ← Entry point + theme restoration
 │   ├── pages/
 │   │   ├── Login.tsx           ← Auth (2 tabs: device flow + token paste)
-│   │   ├── Setup.tsx           ← First-run wizard (org, agent, scope)
-│   │   ├── Dashboard.tsx       ← Orgs overview (cards cliquables)
-│   │   ├── Catalog.tsx         ← Browse/search skills + pagination + SkillCard inline
-│   │   ├── SkillDetail.tsx     ← Detail + 3 tabs (readme/versions/files) + install sidebar
+│   │   ├── Setup.tsx           ← Company, assistant detection, opt-in migration
+│   │   ├── Dashboard.tsx       ← Health, actions, global auto-update and manual updates
+│   │   ├── Catalog.tsx         ← Search and managed install in one action
+│   │   ├── SkillDetail.tsx     ← Employee detail and managed primary action
 │   │   ├── Commands.tsx        ← Browse/install/update/remove slash commands + publish version
-│   │   ├── Installed.tsx       ← Local skills groupés par agent/scope + update + uninstall
+│   │   ├── Installed.tsx       ← One canonical row, agent availability, repair/uninstall
 │   │   ├── Publish.tsx         ← Push skill (file picker dialog + preview + dry-run)
 │   │   ├── EnvVars.tsx         ← Env vars CRUD + masking + import .env
 │   │   └── Settings.tsx        ← User info, org/agent/scope, theme toggle, sign out
@@ -90,13 +94,15 @@ skillreg-local/
 │   ├── lib/
 │   │   ├── api.ts              ← Wrappers invoke() typés, dont publishCommandVersion
 │   │   ├── command-publishing.ts ← Pure draft preparation and command publication validation
-│   │   ├── store.ts            ← Zustand stores (useAuthStore, useConfigStore)
+│   │   ├── store.ts            ← Zustand auth/config/managed, stale-response protection
+│   │   ├── employee-model.ts   ← Pure employee state and actions
 │   │   ├── types.ts            ← Types partagés (Rust ↔ TS)
 │   │   ├── constants.ts        ← API_BASE_URL (pour verificationUrl côté front)
 │   │   └── utils.ts            ← cn() helper (clsx + tailwind-merge)
 │   └── styles/
-│       └── globals.css         ← Tailwind base + dark/light themes + prose styles
+│       └── globals.css         ← Tailwind base + dark palette + prose styles
 ├── .github/workflows/
+│   ├── ci.yml                  ← Format/build/Node/Vitest/Rust on three OS, no publishing
 │   └── release.yml             ← CI/CD cross-platform (macOS arm64/x86, Ubuntu, Windows)
 ├── package.json
 ├── tsconfig.json
@@ -340,160 +346,27 @@ fn import_env_file(org: String, skill: String, file_path: String) -> Result<Hash
 
 ## 6. Écrans Détaillés
 
-### 6.1 Login
+### 6.1–6.6 Parcours collaborateur géré
 
-```
-┌──────────────────────────────────────────┐
-│              SkillReg Local              │
-│                                          │
-│          [Logo SkillReg]                 │
-│                                          │
-│   ┌──────────────────────────────────┐   │
-│   │  [ Login with Browser ]          │   │ ← Device flow (recommandé)
-│   └──────────────────────────────────┘   │
-│                                          │
-│   ┌──────────────────────────────────┐   │
-│   │  [ Login with Token ]            │   │ ← Input token manuellement
-│   └──────────────────────────────────┘   │
-│                                          │
-│   Pas encore de compte ?                 │
-│   Créez-en un sur app.skillreg.dev       │
-└──────────────────────────────────────────┘
-```
+- Login : connexion navigateur recommandée ; accès par token conservé en option avancée.
+- Setup : entreprise automatique si unique, choix si plusieurs, création de workspace via
+  navigateur s’il n’existe pas, détection puis aperçu de migration opt-in. Préparation en échec :
+  état explicite et réessai ; aucune sélection d’agent/scope/version dans le parcours principal.
+- Accueil : santé des assistants, skills et accès requis, réconciliation automatique des bindings,
+  toggle global de mises à jour, vérification et mise à jour manuelles même avec toggle OFF.
+- Catalogue et détail : recherche, description et action principale gérée ; sélection de version
+  approuvée côté serveur, agents disponibles détectés automatiquement.
+- Mes skills : une ligne canonique avec disponibilités, accès manquants, réparation et suppression.
+  Désinstallation via dialogue natif modal, focus initial non destructif, retour au déclencheur,
+  annulation bloquée durant l’opération ; les accès enregistrés sont conservés.
+- Réglages : import des skills locales après aperçu ; conflits, projets, contenus modifiés et
+  liens externes conservés. Pas de publication implicite, pas d’usage/compteur/classement.
 
-**Device flow UX** :
-1. Clic "Login with Browser" → affiche un code (ex: `A3F7K2`)
-2. Le navigateur s'ouvre sur la page d'autorisation
-3. Spinner "En attente d'autorisation..." avec le code bien visible
-4. Quand autorisé → transition vers Setup ou Dashboard
-
-### 6.2 Setup Wizard (premier lancement)
-
-```
-Step 1/3 — Organisation
-┌─────────────────────────────┐
-│ Sélectionnez votre org :    │
-│                              │
-│ ◉ acme-corp (owner)         │
-│ ○ my-team (admin)           │
-│                              │
-│         [ Suivant → ]        │
-└─────────────────────────────┘
-
-Step 2/3 — Agent par défaut
-┌─────────────────────────────┐
-│ Quel agent utilisez-vous ?  │
-│                              │
-│ ◉ Claude                     │
-│ ○ Cursor                     │
-│ ○ Codex                      │
-│                              │
-│  [ ← Retour ] [ Suivant → ] │
-└─────────────────────────────┘
-
-Step 3/3 — Scope
-┌─────────────────────────────┐
-│ Installer les skills pour : │
-│                              │
-│ ◉ Ce projet (project)       │
-│ ○ Tout l'utilisateur (user) │
-│                              │
-│  [ ← Retour ] [ Terminer ]  │
-└─────────────────────────────┘
-```
-
-### 6.3 Dashboard
-
-```
-┌─────────┬────────────────────────────────────────┐
-│ Sidebar │  Mes Organisations                      │
-│         │                                          │
-│ 🏠 Home │  ┌──────────────┐  ┌──────────────┐    │
-│ 📦 Cat. │  │ acme-corp    │  │ my-team      │    │
-│ 💻 Local│  │ 12 skills    │  │ 3 skills     │    │
-│ ⬆ Push  │  │ 5 membres    │  │ 2 membres    │    │
-│ 🔑 Env  │  │ Plan: Team   │  │ Plan: Free   │    │
-│ ⚙ Prefs │  │ [ Ouvrir ]   │  │ [ Ouvrir ]   │    │
-│         │  └──────────────┘  └──────────────┘    │
-│         │                                          │
-└─────────┴────────────────────────────────────────┘
-```
-
-### 6.4 Catalog
-
-```
-┌─────────┬────────────────────────────────────────┐
-│ Sidebar │  acme-corp — Skills                     │
-│         │                                          │
-│         │  [🔍 Rechercher...                    ]  │
-│         │                                          │
-│         │  Filtres: [All Tags ▾] [Tri: Updated ▾] │
-│         │                                          │
-│         │  ┌────────────────────────────────────┐  │
-│         │  │ code-review-expert        v2.1.0   │  │
-│         │  │ Expert code review for PRs         │  │
-│         │  │ [typescript] [review]              │  │
-│         │  │ ⬇ 234 downloads    [ Install ✓ ]  │  │
-│         │  └────────────────────────────────────┘  │
-│         │  ┌────────────────────────────────────┐  │
-│         │  │ api-design-guide          v1.0.3   │  │
-│         │  │ REST API design best practices     │  │
-│         │  │ [api] [design]                     │  │
-│         │  │ ⬇ 89 downloads     [ Installed ]  │  │
-│         │  └────────────────────────────────────┘  │
-└─────────┴────────────────────────────────────────┘
-```
-
-### 6.5 Skill Detail
-
-```
-┌─────────┬───────────────────────────┬────────────┐
-│ Sidebar │  code-review-expert       │ Metadata   │
-│         │  Expert code review...    │            │
-│         │                           │ v2.1.0     │
-│         │  [README] [Versions] [Files] │ 234 ⬇   │
-│         │  ─────────────────────────│ 12.4 KB    │
-│         │                           │ 3 versions │
-│         │  # Code Review Expert     │            │
-│         │                           │ Tags:      │
-│         │  This skill helps you     │ typescript │
-│         │  perform thorough code    │ review     │
-│         │  reviews on pull requests │            │
-│         │  ...                      │ SHA256:    │
-│         │                           │ a1b2c3...  │
-│         │                           │            │
-│         │  ┌────────────────────┐   │ Agent:     │
-│         │  │ [ Install v2.1.0 ]│   │ [Claude ▾] │
-│         │  └────────────────────┘   │ Scope:     │
-│         │                           │ [Project▾] │
-└─────────┴───────────────────────────┴────────────┘
-```
-
-### 6.6 Installed Skills
-
-```
-┌─────────┬────────────────────────────────────────┐
-│ Sidebar │  Skills Installés                       │
-│         │                                          │
-│         │  Claude (project) — .claude/skills/      │
-│         │  ┌────────────────────────────────────┐  │
-│         │  │ ● code-review     v2.1.0           │  │
-│         │  │   Expert code review               │  │
-│         │  │   [Update ⬆ v2.2.0] [Uninstall]   │  │
-│         │  ├────────────────────────────────────┤  │
-│         │  │ ● api-design      v1.0.3           │  │
-│         │  │   REST API design guide            │  │
-│         │  │   [✓ À jour]        [Uninstall]    │  │
-│         │  └────────────────────────────────────┘  │
-│         │                                          │
-│         │  Claude (user) — ~/.claude/skills/       │
-│         │  ┌────────────────────────────────────┐  │
-│         │  │ ● shared-utils    v0.5.0           │  │
-│         │  │   ⚠ 2 env vars manquantes          │  │
-│         │  │   [Configure Env] [Uninstall]      │  │
-│         │  └────────────────────────────────────┘  │
-└─────────┴────────────────────────────────────────┘
-```
+`src/lib/employee-model.ts` calcule les états affichés, `useManagedSkillsStore` orchestre les
+wrappers IPC et rejette les réponses périmées après reset/changement d’organisation. Les erreurs
+ne transforment pas un inventaire d’accès inconnu en liste vide autorisant l’écrasement.
+Les détails utilisateur sont dans `docs/managed-skills-user-guide.md` ; les preuves natives
+et limites d’accessibilité sont dans `docs/managed-skills-release-validation.md`.
 
 ### 6.7 Publish (Push)
 
@@ -561,90 +434,90 @@ Changer d'organisation ferme le dialogue ; les réponses obsolètes ne remplacen
 
 ---
 
-## 7. Fichiers de Config Partagés
+## 7. État local et moteur géré
 
-L'app desktop utilise exactement les mêmes fichiers que le CLI :
+| Fichier | Contrat |
+| --- | --- |
+| `~/.skillreg/config.json` | Token, org active, réglages et état setup ; écriture atomique privée. |
+| `~/.skillreg/installed.json` | Manifeste legacy v1, lecteur conservé, jamais remplacé par v2. |
+| `~/.skillreg/managed-skills.json` | Manifeste v2 strict, skills canoniques, hashes, bindings, organisation active, erreurs structurées et tombstones bornées. |
+| `~/.skillreg/installed-v1.backup.json` | Copie du manifeste avant migration ; **pas une sauvegarde complète de downgrade**. |
+| `~/.skillreg/skills/<consumer-org>/<source-org>/<name>/content` | Copie canonique vérifiée ; dossiers `staging` et `previous` pour la transaction. |
+| `~/.skillreg/commands.json` | Slash commands ; contrat de publication inchangé. |
+| `.skillregrc` et dossiers agents projet | Scope projet legacy, conservé hors migration. |
+| `~/.skillreg/env/<org>/` et credential store OS | Index sans secrets, fallback permissionné et accès locaux ; jamais effacés par désinstallation de skill. |
 
-| Fichier | Contenu |
-|---------|---------|
-| `~/.skillreg/config.json` | Token, apiUrl, org par défaut, agent, scope, setupDone, autoUpdateEnabled, autoUpdateIntervalMinutes, launchAtLogin |
-| `~/.skillreg/installed.json` | Manifest local des skills installés via SkillReg : org, nom, version, agent, scope, chemin, hash du `SKILL.md`, checksum tarball, opt-out auto-update, timestamps et dernière erreur. |
-| `.skillregrc` | Config par projet (org, skills) |
-| OS credential store | Valeurs org-level locales via macOS Keychain, Windows Credential Manager ou Linux Secret Service. |
-| `~/.skillreg/env/{org}/index.json` | Métadonnées sans secrets : noms de variables, statut configuré, backend de stockage, timestamps. |
-| `~/.skillreg/env/{org}/variables.env` | Fallback local permissionné si le secure store est indisponible, et source Phase 2 migrable explicitement. |
-| `~/.skillreg/env/{org}/{skill}.env` | Fichiers legacy par skill, lus pour compatibilité et migration sûre. |
+`managed_skills/` contient archive/confinement, manifeste, service transactionnel, adaptateurs,
+bindings, réconciliation, migration et import. Toutes les mutations utilisent le même verrou.
+Après interruption, le hash du manifeste décide entre `content` et `previous` ; un état ambigu
+reste conservé avec erreur explicite. Un fichier temporaire préexistant n’est pas écrasé.
+Sur Unix, `.skillreg` est privé (0700) et les nouveaux fichiers sensibles en 0600. Sur Windows,
+les ACL ciblées du répertoire et des temporaires sont durcies et vérifiées avant remplacement ;
+une preuve runtime en compte standard reste exigée.
 
-Les chemins d'installation sont identiques au CLI :
+Bindings utilisateur : Claude `.claude/skills`, Codex `.agents/skills`, Cursor `.cursor/skills`.
+Les anciens dossiers Codex `.codex/skills` restent détectés, sans appropriation automatique.
+macOS arm64 seul est activé dans le code ; macOS x64, Windows et Linux attendent leurs preuves
+runtime. Windows emploie des junctions NTFS, jamais un fallback par copies physiques.
 
-```
-claude:  .claude/skills/ (project)  ~/.claude/skills/ (user)
-codex:   .codex/skills/  (project)  ~/.codex/skills/  (user)
-cursor:  .cursor/skills/ (project)  ~/.cursor/skills/ (user)
-```
+### IPC et API gérés
 
-### Auto-update des skills installés
+`install_managed_skill(consumer_org, source_org?, name)` résout la politique serveur, télécharge
+et vérifie une archive puis crée les bindings possibles. Rust utilise
+`GET /api/v1/orgs/{consumer}/managed-skills/{source}/{name}/target` et `/download` ; checksum et
+métadonnées d’identité/version sont obligatoires. Le frontend ne choisit ni version, ni chemin,
+ni agent. Les DTO du cycle de vie collaborateur excluent les chemins natifs (les aperçus avancés de
+migration/import exposent les sources locales pour diagnostic) ; les erreurs exposent un code et le seul
+statut HTTP validé, sans URL signée, jeton ni message brut.
 
-SkillReg Local reste résident dans le tray/menu bar quand la fenêtre est fermée. Le bouton Quit du tray arrête explicitement le process et donc le worker d'auto-update.
+Autres commandes : `detect_managed_agents`, `get_managed_overview`, `uninstall_managed_skill`,
+`repair_managed_skill`, `repair_all_managed_skills`, `switch_active_org`,
+`preview_managed_skills_migration`, `run_managed_skills_migration`, `repair_managed_skills`,
+`preview_local_skills_import`, `run_local_skills_import`. Les commandes legacy restent protégées
+contre une mutation concurrente du contenu géré. Les commandes de publication de slash commands
+restent enregistrées dans `lib.rs` et exposées dans `api.ts`.
 
-Par défaut, l'app démarre à la connexion utilisateur et vérifie les skills toutes les 60 minutes. Ces réglages sont stockés dans `~/.skillreg/config.json` et peuvent être désactivés dans Settings. Les valeurs absentes gardent le comportement par défaut sans réécrire le fichier de config.
+### Mises à jour
 
-Le worker ne met à jour automatiquement que les installations suivies dans `~/.skillreg/installed.json`. Avant d'écraser un skill, il vérifie que le hash actuel du `SKILL.md` correspond au hash enregistré lors de la dernière installation SkillReg, qu'une version approuvée plus récente existe côté registry, et que le checksum SHA-256 du tarball téléchargé correspond au checksum serveur quand il est fourni. Un skill modifié localement est ignoré.
+L’app reste résidente dans le tray ; Quit arrête le worker. Démarrage à la connexion désactivé
+par défaut ; vérification automatique activée, intervalle par défaut 60 minutes (borné 15–1440).
+Le worker géré respecte le toggle global, le hash de tout le contenu, l’origine locale exclue et
+la politique de version approuvée. Vérification/mise à jour manuelles restent disponibles OFF.
+L’événement `managed-update:completed` rafraîchit l’UI gérée après un run ;
+`auto-update:completed` reste associé au worker legacy.
 
-Après un run avec mises à jour, SkillReg envoie une notification OS et émet l'événement frontend `auto-update:completed`. Les erreurs sont enregistrées dans le manifest et exposées à l'UI sans spam de notifications.
+### Retour arrière
 
----
+Rollback d’opération et downgrade de release sont distincts. Le second nécessite le snapshot
+complet antérieur des racines `.skillreg`, `.claude`, `.codex`, `.cursor`, `.agents` et une preuve
+avec binaire legacy identifié. L’outil support Node `scripts/managed-skills-backup-restore.mjs`
+préserve modes/ACL/liens, refuse les chemins dangereux, propose un aperçu et conserve l’état
+remplacé dans un dossier de récupération distinct. Il n’exporte jamais le trousseau système.
+Protocole et limites : `docs/managed-skills-release-validation.md`, scénario 18 toujours ouvert.
 
 ## 8. Dépendances Rust
 
-```toml
-[dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
-tauri-plugin-shell = "2"           # Ouvrir le navigateur
-tauri-plugin-dialog = "2"          # File picker natif
-tauri-plugin-autostart = "2"       # Launch at login
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
-tokio = { version = "1", features = ["full"] }
-sha2 = "0.10"                      # SHA-256 checksum
-tar = "0.4"                        # Tarball creation/extraction
-flate2 = "1.0"                     # Gzip compression
-dirs = "5"                         # Home directory, config paths
-open = "5"                         # Ouvrir URL dans le navigateur
-```
+`src-tauri/Cargo.toml` et son lockfile font foi : Tauri 2.11.5, tauri-build 2.6.3, tar 0.4.46,
+reqwest/tokio/serde/sha2/flate2/dirs/open et backends credential store par OS.
+Le socle géré ajoute `uuid` et, uniquement sous Windows, `junction` et les primitives
+`windows-sys` ciblées pour le remplacement atomique. Aucun nouvel accès système privilégié.
 
----
+## 9. Frontend, tests et livraison
 
-## 9. Dépendances Frontend
+React 19, TypeScript strict, Vite 6, Tailwind 4, Zustand 5 ; versions effectives dans
+`package.json` et `pnpm-lock.yaml`. Vitest/Testing Library/jsdom sont repris du socle pour les
+composants/stores/modèles/IPC ; `pnpm test` lance Node puis Vitest.
 
-```json
-{
-  "dependencies": {
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "react-router": "^7.0.0",
-    "@tauri-apps/api": "^2.0.0",
-    "@tauri-apps/plugin-shell": "^2.0.0",
-    "@tauri-apps/plugin-dialog": "^2.0.0",
-    "zustand": "^5.0.0",
-    "react-markdown": "^9.0.0",
-    "tailwindcss": "^4.0.0",
-    "class-variance-authority": "^0.7.0",
-    "clsx": "^2.0.0",
-    "tailwind-merge": "^2.0.0",
-    "lucide-react": "^0.400.0"
-  },
-  "devDependencies": {
-    "@tauri-apps/cli": "^2.0.0",
-    "typescript": "^5.7.0",
-    "vite": "^6.0.0",
-    "@vitejs/plugin-react": "^4.0.0"
-  }
-}
-```
+La validation usine du candidat est `pnpm format:check && pnpm build && cargo test
+--manifest-path src-tauri/Cargo.toml --locked && node --test --experimental-strip-types
+tests/*.test.ts` (sur une ligne). Compléter par `pnpm test:frontend`, Cargo check et garde
+notarisation. `tsc` ne type pas les fichiers `tests/*.test.ts`.
 
----
+La CI autonome Linux/macOS/Windows construit `dist/` avant Cargo sur chaque OS, lockfiles figés,
+Rust `--no-fail-fast --locked`, sans secret ni publication. La release sur tag conserve signature,
+notarisation/agrafage DMG et brouillon. Le helper `generate-updater-manifest.mjs` prépare un
+`latest.json` complet : `.app.tar.gz` macOS, `.exe` NSIS Windows, `.AppImage` Linux et leurs
+signatures exactes. Aucune version/tag/release n’est produit pendant l’implémentation.
 
 ## 10. Phases de Développement
 
@@ -733,16 +606,10 @@ open = "5"                         # Ouvrir URL dans le navigateur
 
 ## 12. Interopérabilité CLI ↔ Desktop
 
-L'app desktop et le CLI partagent :
-- Les mêmes fichiers de config (`~/.skillreg/config.json`, `.skillregrc`)
-- Les mêmes chemins d'installation (`.claude/skills/`, etc.)
-- Les mêmes env vars (`~/.skillreg/env/`)
-- La même API REST
-
-Un utilisateur peut installer un skill via l'app desktop et le voir avec `skillreg local`.
-Un développeur peut push via le CLI et les non-techniques installent via l'app.
-
----
+Configuration/env locaux et API REST restent partagés. Le contrat CLI attendu conserve les
+installations de projet et refuse de muter un manifeste v2 au scope utilisateur. Cette preuve
+app/CLI/site est externe à ce dépôt et doit être rattachée au candidat ; les résultats historiques
+ne suffisent pas. Ne pas annoncer un support runtime sur la seule base des fixtures desktop.
 
 ## 13. Sécurité
 
@@ -753,3 +620,10 @@ Un développeur peut push via le CLI et les non-techniques installent via l'app.
 - react-markdown pour le rendu markdown
 - Pas de secrets en clair dans l'UI (masquage des tokens et env vars)
 - Auto-update signé (Tauri updater avec signature — endpoint configuré)
+
+## 14. État du lot A et autorisation
+
+Le socle managed est présent et testé par fixtures. La checklist de release et son registre de
+preuves restent **NO-GO dogfood et activation générale** tant que CI distante, campagnes natives,
+Windows standard, binaire legacy, accessibilité, signatures/updater et observations 72 h/J+7
+manquent. Les phases historiques ci-dessus ne valent pas autorisation du nouveau candidat.

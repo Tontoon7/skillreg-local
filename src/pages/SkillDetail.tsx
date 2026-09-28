@@ -1,93 +1,49 @@
-import { DeleteSkillDialog } from "@/components/DeleteSkillDialog";
 import { EnvVarSetupDialog } from "@/components/EnvVarSetupDialog";
 import { ValidationBadge } from "@/components/ValidationBadge";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Select } from "@/components/ui/select";
-import { getSkill, pullSkill } from "@/lib/api";
-import { useConfigStore } from "@/lib/store";
-import type { AgentType, EnvVarDecl, ScopeType, SkillDetail as SkillDetailType } from "@/lib/types";
-import { cn } from "@/lib/utils";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { AgentAvailability } from "@/components/skills/AgentAvailability";
 import {
+	SkillPrimaryAction,
+	type SkillPrimaryActionKind,
+} from "@/components/skills/SkillPrimaryAction";
+import { Button } from "@/components/ui/button";
+import { getSkill } from "@/lib/api";
+import { useAuthStore, useConfigStore, useManagedSkillsStore } from "@/lib/store";
+import type { EnvVarDecl, SkillDetail as SkillDetailType } from "@/lib/types";
+import {
+	AlertTriangle,
 	ArrowLeft,
-	Check,
-	Clock,
-	Download,
-	FileText,
-	FolderOpen,
-	Hash,
-	Loader2,
-	Package,
-	Trash2,
-	User,
+	Building2,
+	Database,
+	Lightbulb,
+	ShieldCheck,
 } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import Markdown from "react-markdown";
-import { useNavigate, useParams } from "react-router";
+import { useNavigate, useParams, useSearchParams } from "react-router";
 import rehypeSanitize from "rehype-sanitize";
 
-type Tab = "instructions" | "versions" | "files";
-
-// Strip YAML frontmatter and return metadata + body separately
-function splitFrontmatter(content: string): {
-	meta: Record<string, string>;
-	body: string;
-} {
-	const match = content.match(/^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/);
-	if (!match) return { meta: {}, body: content };
-
-	const meta: Record<string, string> = {};
-	let currentKey = "";
-	let currentVal = "";
-
-	for (const line of match[1].split("\n")) {
-		// Indented line = continuation of previous value
-		if (/^\s{2,}/.test(line) && currentKey) {
-			const trimmed = line.trim();
-			if (trimmed) {
-				currentVal += (currentVal ? " " : "") + trimmed;
-				meta[currentKey] = currentVal;
-			}
-			continue;
-		}
-		// Top-level key: value
-		const kv = line.match(/^([a-zA-Z][\w.-]*)\s*:\s*(.*)$/);
-		if (kv) {
-			currentKey = kv[1];
-			const raw = kv[2].trim();
-			if (raw === "|" || raw === ">") {
-				currentVal = "";
-				meta[currentKey] = "";
-			} else {
-				currentVal = raw.replace(/^["']|["']$/g, "");
-				meta[currentKey] = currentVal;
-			}
-		}
-	}
-
-	return { meta, body: match[2] };
+function splitFrontmatter(content: string): { body: string } {
+	const match = content.match(/^---\s*\n[\s\S]*?\n---\s*\n?([\s\S]*)$/);
+	return { body: match?.[1] ?? content };
 }
 
-class ErrorBoundary extends React.Component<
-	{ children: React.ReactNode; fallback?: React.ReactNode },
-	{ error: string | null }
-> {
-	state = { error: null as string | null };
-	static getDerivedStateFromError(err: Error) {
-		return { error: `${err.message}\n${err.stack}` };
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
+	state = { failed: false };
+
+	static getDerivedStateFromError() {
+		return { failed: true };
 	}
+
 	render() {
-		if (this.state.error) {
+		if (this.state.failed) {
 			return (
-				this.props.fallback ?? (
-					<div className="p-6 space-y-2">
-						<p className="text-sm text-destructive font-medium">Rendering error</p>
-						<pre className="text-xs text-muted-foreground bg-muted rounded p-3 overflow-auto whitespace-pre-wrap">
-							{this.state.error}
-						</pre>
-					</div>
-				)
+				<div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+					<AlertTriangle className="size-8 text-destructive" />
+					<h1 className="text-lg font-semibold">Cette skill ne peut pas être affichée</h1>
+					<p className="text-sm text-muted-foreground">
+						Revenez au catalogue puis réessayez dans quelques instants.
+					</p>
+				</div>
 			);
 		}
 		return this.props.children;
@@ -97,411 +53,259 @@ class ErrorBoundary extends React.Component<
 export function SkillDetailPage() {
 	return (
 		<ErrorBoundary>
-			<SkillDetailInner />
+			<SkillDetail />
 		</ErrorBoundary>
 	);
 }
 
-function SkillDetailInner() {
+function SkillDetail() {
 	const { name } = useParams<{ name: string }>();
-	const org = useConfigStore((s) => s.config.org);
-	const config = useConfigStore((s) => s.config);
+	const [searchParams] = useSearchParams();
+	const consumerOrg = useConfigStore((state) => state.config.org);
+	const user = useAuthStore((state) => state.user);
+	const overview = useManagedSkillsStore((state) => state.overview);
+	const model = useManagedSkillsStore((state) => state.model);
+	const installingKeys = useManagedSkillsStore((state) => state.installingKeys);
+	const refresh = useManagedSkillsStore((state) => state.refresh);
+	const install = useManagedSkillsStore((state) => state.install);
+	const updateNow = useManagedSkillsStore((state) => state.updateNow);
 	const navigate = useNavigate();
-
+	const sourceOrg = searchParams.get("source") || consumerOrg;
 	const [skill, setSkill] = useState<SkillDetailType | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
-	const [tab, setTab] = useState<Tab>("instructions");
-
-	const [agent, setAgent] = useState<AgentType>(config.defaultAgent || "claude");
-	const [scope, setScope] = useState<ScopeType>(config.defaultScope || "project");
-	const [selectedVersion, setSelectedVersion] = useState<string>("");
-	const [projectDir, setProjectDir] = useState<string | null>(null);
-	const [installing, setInstalling] = useState(false);
-	const [installed, setInstalled] = useState(false);
-	const [installError, setInstallError] = useState<string | null>(null);
-	const [detectedEnvVars, setDetectedEnvVars] = useState<EnvVarDecl[]>([]);
+	const [actionError, setActionError] = useState<string | null>(null);
+	const [localState, setLocalState] = useState<"ready" | "configure" | null>(null);
+	const [pendingEnvVars, setPendingEnvVars] = useState<EnvVarDecl[]>([]);
 	const [showEnvDialog, setShowEnvDialog] = useState(false);
-	const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
 	useEffect(() => {
-		if (!org || !name) return;
+		if (!sourceOrg || !name) return;
 		setLoading(true);
-		getSkill(org, name)
-			.then((s) => {
-				setSkill(s);
-				if (s.latestVersion) setSelectedVersion(s.latestVersion);
-			})
-			.catch((e) => setError(typeof e === "string" ? e : "Failed to load skill"))
+		setError(null);
+		getSkill(sourceOrg, name)
+			.then(setSkill)
+			.catch((loadError) =>
+				setError(typeof loadError === "string" ? loadError : "Cette skill n’est pas disponible."),
+			)
 			.finally(() => setLoading(false));
-	}, [org, name]);
+		void refresh();
+	}, [name, refresh, sourceOrg]);
 
-	const parsed = useMemo(() => {
-		const raw = skill?.latestVersionData?.skillMdContent;
-		if (!raw) return null;
-		try {
-			return splitFrontmatter(raw);
-		} catch {
-			return { meta: {} as Record<string, string>, body: raw };
-		}
+	const parsedBody = useMemo(() => {
+		const content = skill?.latestVersionData?.skillMdContent;
+		return content ? splitFrontmatter(content).body : "";
 	}, [skill?.latestVersionData?.skillMdContent]);
 
-	const pickProjectDir = async () => {
-		const selected = await openDialog({ directory: true, title: "Select project folder" });
-		if (typeof selected === "string") {
-			setProjectDir(selected);
-			setInstalled(false);
-			setInstallError(null);
-		}
-	};
+	const installedRow = model?.skills.find(
+		(row) => row.name === name && row.sourceOrg === sourceOrg,
+	);
+	const overviewInstallation = overview?.installations.find(
+		(item) => item.installation.skillName === name && item.installation.sourceOrg === sourceOrg,
+	);
+	const detectedAgents =
+		overview?.agents.filter((agent) => agent.state === "detected").map((agent) => agent.agent) ??
+		[];
+	const installingKey =
+		consumerOrg && sourceOrg && name ? `${consumerOrg}/${sourceOrg}/${name}` : "";
+	const action = resolvePrimaryAction({
+		localState,
+		installedAction: installedRow?.primaryAction,
+		installing: installingKeys.includes(installingKey),
+	});
+	const needsConfiguration =
+		localState === "configure" || installedRow?.primaryAction === "configure";
 
-	const handleInstall = async () => {
-		if (!org || !name) return;
-		if (scope === "project" && !projectDir) {
-			setInstallError("Select a project folder first");
-			return;
-		}
-		setInstalling(true);
-		setInstallError(null);
+	const handlePrimaryAction = async () => {
+		if (!consumerOrg || !sourceOrg || !name) return;
+		setActionError(null);
 		try {
-			const result = await pullSkill({
-				org,
-				name,
-				version: selectedVersion || undefined,
-				agent,
-				scope,
-				projectDir: scope === "project" ? (projectDir ?? undefined) : undefined,
-			});
-			setInstalled(true);
-			if (result.envVars.length > 0) {
-				setDetectedEnvVars(result.envVars);
-				setShowEnvDialog(true);
+			if (action === "install") {
+				const result = await install({
+					consumerOrg,
+					sourceOrg,
+					name,
+				});
+				if (result.requiredEnvVars.length > 0) {
+					setPendingEnvVars(result.requiredEnvVars);
+					setLocalState("configure");
+					setShowEnvDialog(true);
+				} else {
+					setLocalState("ready");
+				}
+				return;
 			}
-		} catch (e) {
-			setInstallError(typeof e === "string" ? e : "Install failed");
-		} finally {
-			setInstalling(false);
+			if (action === "configure") {
+				const envVars = overviewInstallation?.missingEnvVars ?? pendingEnvVars;
+				if (envVars.length > 0) {
+					setPendingEnvVars(envVars);
+					setShowEnvDialog(true);
+				} else {
+					navigate(`/env?skill=${encodeURIComponent(name)}`);
+				}
+				return;
+			}
+			if (action === "update") {
+				await updateNow();
+				return;
+			}
+			if (action === "repair") {
+				navigate(`/installed?skill=${encodeURIComponent(name)}`);
+			}
+		} catch (primaryError) {
+			setActionError(
+				typeof primaryError === "string" ? primaryError : "Cette action n’a pas pu être effectuée.",
+			);
 		}
 	};
 
 	if (loading) {
-		return (
-			<div className="flex items-center justify-center h-full">
-				<Loader2 className="size-6 animate-spin text-muted-foreground" />
-			</div>
-		);
+		return <SkillDetailSkeleton />;
 	}
 
 	if (error || !skill) {
 		return (
-			<div className="flex flex-col items-center justify-center gap-3 h-full">
-				<p className="text-sm text-destructive">{error || "Skill not found"}</p>
+			<div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+				<AlertTriangle className="size-8 text-destructive" />
+				<p className="text-sm text-destructive">{error || "Skill introuvable"}</p>
 				<Button variant="outline" size="sm" onClick={() => navigate("/catalog")}>
 					<ArrowLeft className="size-4" />
-					Back to catalog
+					Retour au catalogue
 				</Button>
 			</div>
 		);
 	}
 
-	const versionData = skill.latestVersionData;
-	const meta = parsed?.meta ?? {};
-	const hasExtraMeta = meta.compatibility || meta.metadata || meta.author;
+	const sourceName =
+		user?.orgs.find((organization) => organization.slug === sourceOrg)?.name ??
+		sourceOrg ??
+		"Source autorisée";
 
 	return (
-		<div className="flex flex-col h-full">
-			{/* Header */}
-			<div className="flex items-center gap-3 border-b p-4">
-				<Button variant="ghost" size="sm" onClick={() => navigate("/catalog")}>
-					<ArrowLeft className="size-4" />
-				</Button>
-				<div className="flex-1 min-w-0">
-					<div className="flex items-center gap-2">
-						<h1 className="text-lg font-semibold truncate">{skill.name}</h1>
-						{skill.latestVersion && <Badge variant="secondary">{skill.latestVersion}</Badge>}
+		<div className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-6">
+			<Button variant="ghost" size="sm" className="w-fit" onClick={() => navigate("/catalog")}>
+				<ArrowLeft className="size-4" />
+				Retour au catalogue
+			</Button>
+
+			<header className="panel-raised flex flex-col gap-5 rounded-xl p-6 sm:flex-row sm:items-start">
+				<div className="min-w-0 flex-1 space-y-3">
+					<div className="flex flex-wrap items-center gap-2">
+						<h1 className="text-2xl font-semibold">{skill.name}</h1>
 						<ValidationBadge level={skill.latestVersionData?.validationLevel} />
-						{skill.isDeprecated && <Badge variant="destructive">Deprecated</Badge>}
+						{needsConfiguration && (
+							<span className="rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
+								À configurer
+							</span>
+						)}
 					</div>
-					{skill.description && (
-						<p className="text-sm text-muted-foreground truncate">{skill.description}</p>
+					<p className="max-w-2xl text-base text-secondary-foreground">
+						{skill.description || "Une skill approuvée pour vous aider dans votre travail."}
+					</p>
+					<div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+						<span className="inline-flex items-center gap-1.5">
+							<Building2 className="size-3.5" />
+							{sourceName}
+						</span>
+						<span className="inline-flex items-center gap-1.5">
+							<ShieldCheck className="size-3.5" />
+							Approuvée par votre entreprise
+						</span>
+					</div>
+					{skill.isDeprecated && (
+						<p className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm text-primary">
+							{skill.deprecatedMessage ||
+								"Cette skill n’est plus recommandée. Contactez votre administrateur."}
+						</p>
 					)}
 				</div>
-			</div>
+				<div className="shrink-0">
+					<SkillPrimaryAction
+						kind={action}
+						skillName={skill.name}
+						onAction={() => void handlePrimaryAction()}
+					/>
+				</div>
+			</header>
 
-			<div className="flex flex-1 overflow-hidden">
-				{/* Main content */}
-				<div className="flex-1 overflow-auto">
-					{/* Tabs */}
-					<div className="flex border-b px-4">
-						{(["instructions", "versions", "files"] as const).map((t) => (
-							<button
-								key={t}
-								type="button"
-								onClick={() => setTab(t)}
-								className={cn(
-									"border-b-2 px-4 py-2.5 text-sm font-medium capitalize transition-colors",
-									tab === t
-										? "border-primary text-foreground"
-										: "border-transparent text-muted-foreground hover:text-foreground",
-								)}
-							>
-								{t}
-							</button>
-						))}
-					</div>
+			{actionError && (
+				<p
+					className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+					role="alert"
+				>
+					{actionError}
+				</p>
+			)}
 
-					<div className="p-6">
-						{tab === "instructions" && (
-							<div>
-								{/* Frontmatter metadata card */}
-								{hasExtraMeta && (
-									<div className="flex flex-wrap gap-x-6 gap-y-2 rounded-lg border bg-card p-4 mb-6 text-sm">
-										{meta.compatibility && (
-											<div className="flex items-center gap-1.5 text-muted-foreground">
-												<Package className="size-3.5 shrink-0" />
-												<span>{meta.compatibility}</span>
-											</div>
-										)}
-										{(meta.author || meta.metadata) && (
-											<div className="flex items-center gap-1.5 text-muted-foreground">
-												<User className="size-3.5 shrink-0" />
-												<span>{meta.author || "—"}</span>
-											</div>
-										)}
-									</div>
-								)}
-
-								{/* Markdown body */}
-								{parsed?.body?.trim() ? (
-									<div className="prose max-w-none">
-										<Markdown rehypePlugins={[rehypeSanitize]}>{parsed.body}</Markdown>
-									</div>
-								) : (
-									<p className="text-muted-foreground">No instructions available</p>
-								)}
+			<div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_18rem]">
+				<div className="space-y-5">
+					<section className="panel-inset rounded-xl p-6" aria-labelledby="outcomes-title">
+						<h2 id="outcomes-title" className="mb-4 text-lg font-semibold">
+							Ce que vous pouvez faire
+						</h2>
+						{parsedBody.trim() ? (
+							<div className="prose max-w-none">
+								<Markdown rehypePlugins={[rehypeSanitize]}>{parsedBody}</Markdown>
 							</div>
+						) : (
+							<p className="text-sm text-secondary-foreground">
+								{skill.description ||
+									"Utilisez cette skill depuis votre assistant pour accomplir la tâche décrite."}
+							</p>
 						)}
+					</section>
 
-						{tab === "versions" && (
-							<div className="space-y-2">
-								{skill.versions && skill.versions.length > 0 ? (
-									skill.versions.map((v) => (
-										<div
-											key={v.id}
-											className="flex items-center justify-between rounded-lg border p-3"
-										>
-											<div className="flex items-center gap-3">
-												<Badge variant={v.status === "approved" ? "secondary" : "outline"}>
-													{v.version}
-												</Badge>
-												<span className="text-xs text-muted-foreground capitalize">{v.status}</span>
-											</div>
-											<div className="flex items-center gap-4 text-xs text-muted-foreground">
-												<span className="flex items-center gap-1">
-													<Download className="size-3" />
-													{v.downloads}
-												</span>
-												<span>{formatBytes(v.tarballSize)}</span>
-												<span className="flex items-center gap-1">
-													<Clock className="size-3" />
-													{formatDate(v.createdAt)}
-												</span>
-											</div>
-										</div>
-									))
-								) : (
-									<p className="text-sm text-muted-foreground">No versions</p>
-								)}
-							</div>
-						)}
-
-						{tab === "files" && (
-							<div className="space-y-1">
-								{versionData?.filesManifest && versionData.filesManifest.length > 0 ? (
-									versionData.filesManifest.map((f) => (
-										<div
-											key={f}
-											className="flex items-center gap-2 rounded px-2 py-1 text-sm text-muted-foreground hover:bg-muted/50"
-										>
-											<FileText className="size-3.5 shrink-0" />
-											<span className="truncate font-mono text-xs">{f}</span>
-										</div>
-									))
-								) : (
-									<p className="text-sm text-muted-foreground">No file manifest</p>
-								)}
-							</div>
-						)}
-					</div>
+					<section className="panel-inset rounded-xl p-6" aria-labelledby="examples-title">
+						<div className="mb-4 flex items-center gap-2">
+							<Lightbulb className="size-4 text-primary" />
+							<h2 id="examples-title" className="text-lg font-semibold">
+								Exemples de demandes
+							</h2>
+						</div>
+						<ul className="space-y-2 text-sm text-secondary-foreground">
+							<li className="rounded-lg bg-surface px-4 py-3">
+								« Utilise {skill.name} pour m’aider à obtenir ce résultat. »
+							</li>
+							<li className="rounded-lg bg-surface px-4 py-3">
+								« Guide-moi étape par étape et résume les prochaines actions. »
+							</li>
+						</ul>
+					</section>
 				</div>
 
-				{/* Sidebar metadata */}
-				<aside className="w-64 shrink-0 border-l overflow-auto p-4 space-y-5">
-					{/* Install */}
-					<div className="space-y-3">
-						<div className="space-y-1.5">
-							<label htmlFor="install-agent" className="text-xs font-medium text-muted-foreground">
-								Agent
-							</label>
-							<Select
-								id="install-agent"
-								value={agent}
-								onChange={(e) => setAgent(e.target.value as AgentType)}
-							>
-								<option value="claude">Claude</option>
-								<option value="codex">Codex</option>
-								<option value="cursor">Cursor</option>
-							</Select>
-						</div>
-						<div className="space-y-1.5">
-							<label htmlFor="install-scope" className="text-xs font-medium text-muted-foreground">
-								Scope
-							</label>
-							<Select
-								id="install-scope"
-								value={scope}
-								onChange={(e) => {
-									setScope(e.target.value as ScopeType);
-									setInstalled(false);
-									setInstallError(null);
-								}}
-							>
-								<option value="project">Project</option>
-								<option value="user">User</option>
-							</Select>
-						</div>
-						{scope === "project" && (
-							<div className="space-y-1.5">
-								<span className="text-xs font-medium text-muted-foreground">Project folder</span>
-								<Button
-									variant="outline"
-									size="sm"
-									className="w-full justify-start gap-2 font-normal"
-									onClick={pickProjectDir}
-								>
-									<FolderOpen className="size-3.5 shrink-0" />
-									<span className="truncate text-xs">
-										{projectDir ? projectDir.split("/").pop() : "Select folder..."}
-									</span>
-								</Button>
-								{projectDir && (
-									<p className="truncate text-[11px] text-muted-foreground" title={projectDir}>
-										{projectDir}
-									</p>
-								)}
-							</div>
-						)}
-						<div className="space-y-1.5">
-							<label
-								htmlFor="install-version"
-								className="text-xs font-medium text-muted-foreground"
-							>
-								Version
-							</label>
-							<Select
-								id="install-version"
-								value={selectedVersion}
-								onChange={(e) => {
-									setSelectedVersion(e.target.value);
-									setInstalled(false);
-									setInstallError(null);
-								}}
-							>
-								{skill.versions?.filter((v) => v.status === "approved").length ? (
-									skill.versions
-										.filter((v) => v.status === "approved")
-										.map((v) => (
-											<option key={v.id} value={v.version}>
-												{v.version}
-												{v.version === skill.latestVersion ? " (latest)" : ""}
-											</option>
-										))
-								) : (
-									<option value={skill.latestVersion || ""}>{skill.latestVersion || "—"}</option>
-								)}
-							</Select>
-						</div>
+				<aside className="space-y-5">
+					<section className="panel-inset rounded-xl p-5" aria-labelledby="availability-title">
+						<h2 id="availability-title" className="mb-3 text-sm font-semibold">
+							Vos assistants
+						</h2>
+						<AgentAvailability availableAgents={detectedAgents} />
+					</section>
 
-						<Button className="w-full" onClick={handleInstall} disabled={installing || installed}>
-							{installing ? (
-								<Loader2 className="size-4 animate-spin" />
-							) : installed ? (
-								<Check className="size-4" />
-							) : (
-								<Download className="size-4" />
-							)}
-							{installed
-								? "Installed"
-								: installing
-									? "Installing..."
-									: `Install ${selectedVersion || ""}`}
-						</Button>
-						{installError && <p className="text-xs text-destructive">{installError}</p>}
-					</div>
-
-					{/* Metadata */}
-					<div className="space-y-3 text-sm">
-						<MetaRow icon={Download} label="Downloads" value={String(skill.totalDownloads)} />
-						<MetaRow icon={Package} label="Versions" value={String(skill.totalVersions)} />
-						{versionData && (
-							<MetaRow icon={FileText} label="Size" value={formatBytes(versionData.tarballSize)} />
-						)}
-						{versionData?.sha256 && (
-							<MetaRow icon={Hash} label="SHA256" value={`${versionData.sha256.slice(0, 12)}...`} />
-						)}
-						<MetaRow icon={Clock} label="Updated" value={formatDate(skill.updatedAt)} />
-					</div>
-
-					{/* Tags */}
-					{skill.tags.length > 0 && (
-						<div className="space-y-2">
-							<p className="text-xs font-medium text-muted-foreground">Tags</p>
-							<div className="flex flex-wrap gap-1">
-								{skill.tags.map((tag) => (
-									<Badge key={tag} variant="outline" className="text-xs">
-										{tag}
-									</Badge>
-								))}
-							</div>
+					<section className="panel-inset rounded-xl p-5" aria-labelledby="access-title">
+						<div className="mb-3 flex items-center gap-2">
+							<Database className="size-4 text-primary" />
+							<h2 id="access-title" className="text-sm font-semibold">
+								Données ou accès requis
+							</h2>
 						</div>
-					)}
-
-					{/* Danger zone — registry deletion (server enforces permissions) */}
-					{org && (
-						<div className="space-y-2 border-t pt-4">
-							<p className="text-xs font-medium text-muted-foreground">Danger zone</p>
-							<Button
-								variant="outline"
-								size="sm"
-								className="w-full justify-start gap-2 border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive"
-								onClick={() => setShowDeleteDialog(true)}
-							>
-								<Trash2 className="size-3.5 shrink-0" />
-								Delete from registry
-							</Button>
-						</div>
-					)}
+						<p className="text-sm text-muted-foreground">
+							SkillReg vous indiquera après l’installation si un accès est nécessaire. Les valeurs
+							restent stockées sur cet ordinateur.
+						</p>
+					</section>
 				</aside>
 			</div>
 
-			{showEnvDialog && org && name && (
+			{showEnvDialog && consumerOrg && name && (
 				<EnvVarSetupDialog
 					skillName={name}
-					org={org}
-					envVars={detectedEnvVars}
+					org={consumerOrg}
+					envVars={pendingEnvVars}
 					onClose={() => setShowEnvDialog(false)}
-					onSaved={() => setShowEnvDialog(false)}
-				/>
-			)}
-
-			{showDeleteDialog && org && name && (
-				<DeleteSkillDialog
-					skillName={name}
-					org={org}
-					onClose={() => setShowDeleteDialog(false)}
-					onDeleted={() => {
-						setShowDeleteDialog(false);
-						navigate("/catalog");
+					onSaved={() => {
+						setShowEnvDialog(false);
+						setLocalState("ready");
+						void refresh();
 					}}
 				/>
 			)}
@@ -509,32 +313,32 @@ function SkillDetailInner() {
 	);
 }
 
-function MetaRow({
-	icon: Icon,
-	label,
-	value,
-}: { icon: React.ComponentType<{ className?: string }>; label: string; value: string }) {
+function resolvePrimaryAction({
+	localState,
+	installedAction,
+	installing,
+}: {
+	localState: "ready" | "configure" | null;
+	installedAction: "configure" | "repair" | "update" | "none" | undefined;
+	installing: boolean;
+}): SkillPrimaryActionKind {
+	if (installing) return "installing";
+	if (localState === "configure") return "configure";
+	if (localState === "ready") return "installed";
+	if (!installedAction) return "install";
+	if (installedAction === "none") return "installed";
+	return installedAction;
+}
+
+function SkillDetailSkeleton() {
 	return (
-		<div className="flex items-center justify-between">
-			<span className="flex items-center gap-1.5 text-muted-foreground">
-				<Icon className="size-3.5" />
-				{label}
-			</span>
-			<span className="text-foreground font-mono text-xs">{value}</span>
+		<div className="mx-auto flex w-full max-w-5xl animate-pulse flex-col gap-5 p-6 motion-reduce:animate-none">
+			<div className="h-9 w-36 rounded-lg bg-muted" />
+			<div className="h-44 rounded-xl bg-card" />
+			<div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_18rem]">
+				<div className="h-80 rounded-xl bg-card" />
+				<div className="h-56 rounded-xl bg-card" />
+			</div>
 		</div>
 	);
-}
-
-function formatBytes(bytes: number): string {
-	if (bytes < 1024) return `${bytes} B`;
-	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function formatDate(iso: string): string {
-	return new Date(iso).toLocaleDateString("en-US", {
-		month: "short",
-		day: "numeric",
-		year: "numeric",
-	});
 }

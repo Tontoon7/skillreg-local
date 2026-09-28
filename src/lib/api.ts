@@ -6,6 +6,7 @@ import type {
 	SecureStoreMigrationSummary,
 } from "./env-inventory";
 import type {
+	ActiveOrgSwitchReport,
 	AgentType,
 	AutoUpdateRunSummary,
 	CatalogPolicy,
@@ -16,7 +17,17 @@ import type {
 	DeviceFlowResponse,
 	InstallResult,
 	InstalledCommandRecord,
+	LocalImportPreview,
+	LocalImportReport,
 	LocalSkill,
+	ManagedAgent,
+	ManagedInstallResult,
+	ManagedOverview,
+	ManagedReconcileReport,
+	ManagedUninstallResult,
+	ManagedUpdateSummary,
+	MigrationPreview,
+	MigrationReport,
 	PaginatedCatalogSkills,
 	PaginatedSkills,
 	PollResponse,
@@ -40,6 +51,8 @@ export const readConfig = () => invoke<SkillregConfig>("read_config");
 export const writeConfig = (config: SkillregConfig) => invoke<void>("write_config", { config });
 export const setLaunchAtLogin = (enabled: boolean) =>
 	invoke<void>("set_launch_at_login", { enabled });
+export const setAutoUpdateEnabled = (enabled: boolean) =>
+	invoke<void>("set_auto_update_enabled", { enabled });
 
 // Auth — all HTTP goes through Rust
 export const loginInitiate = () => invoke<DeviceFlowResponse>("login_initiate");
@@ -84,6 +97,36 @@ export const installCatalogSkill = (params: {
 	projectDir?: string;
 	acceptVersionChange?: boolean;
 }) => invoke<InstallResult>("install_catalog_skill", params);
+
+export const installManagedSkill = (params: {
+	consumerOrg: string;
+	sourceOrg?: string;
+	name: string;
+}) => invoke<ManagedInstallResult>("install_managed_skill", params);
+
+export const previewManagedSkillsMigration = () =>
+	invoke<MigrationPreview>("preview_managed_skills_migration");
+
+export const runManagedSkillsMigration = (confirm: boolean) =>
+	invoke<MigrationReport>("run_managed_skills_migration", { confirm });
+
+export const previewLocalSkillsImport = () =>
+	invoke<LocalImportPreview>("preview_local_skills_import");
+
+export const runLocalSkillsImport = (confirm: boolean) =>
+	invoke<LocalImportReport>("run_local_skills_import", { confirm });
+
+export const repairManagedSkill = (installationId: string) =>
+	invoke<ManagedReconcileReport>("repair_managed_skill", { installationId });
+
+export const repairManagedSkills = () =>
+	invoke<ManagedReconcileReport>("repair_all_managed_skills");
+
+export const uninstallManagedSkill = (installationId: string) =>
+	invoke<ManagedUninstallResult>("uninstall_managed_skill", { installationId });
+
+export const switchActiveOrg = (org: string) =>
+	invoke<ActiveOrgSwitchReport>("switch_active_org", { org });
 
 export const pullSkill = (params: {
 	org: string;
@@ -178,9 +221,17 @@ export const setSkillAutoUpdate = (params: {
 
 export const runAutoUpdateNow = () => invoke<AutoUpdateRunSummary>("run_auto_update_now");
 
+export const checkManagedUpdates = (force: boolean) =>
+	invoke<ManagedUpdateSummary>("check_managed_updates", { force });
+
+export const runManagedUpdatesNow = () => invoke<ManagedUpdateSummary>("run_managed_updates_now");
+
 // Skills (local filesystem)
 export const scanLocalSkills = (agent?: string, scope?: string) =>
 	invoke<LocalSkill[]>("scan_local_skills", { agent, scope });
+
+export const detectAgents = () => invoke<ManagedAgent[]>("detect_managed_agents");
+export const getManagedOverview = () => invoke<ManagedOverview>("get_managed_overview");
 
 // Env vars
 export const getEnvVars = (org: string, skill: string) =>

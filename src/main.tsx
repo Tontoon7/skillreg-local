@@ -4,12 +4,14 @@ import { BrowserRouter } from "react-router";
 import { App } from "./App";
 import "./styles/globals.css";
 
-// Debug: capture uncaught errors
-window.addEventListener("error", (e) => {
-	console.error("[UNCAUGHT]", e.message, e.filename, e.lineno, e.colno);
+// Native errors may contain credentials, signed URLs, or private filesystem paths.
+window.addEventListener("error", (event) => {
+	event.preventDefault();
+	console.error("[UNCAUGHT]");
 });
-window.addEventListener("unhandledrejection", (e) => {
-	console.error("[UNHANDLED REJECTION]", e.reason);
+window.addEventListener("unhandledrejection", (event) => {
+	event.preventDefault();
+	console.error("[UNHANDLED REJECTION]");
 });
 
 // biome-ignore lint/style/noNonNullAssertion: root element always exists
