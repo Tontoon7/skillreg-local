@@ -66,7 +66,7 @@ function success(result: ReturnType<typeof run>) {
 	return JSON.parse(result.stdout);
 }
 
-test("Windows rename-only metadata accepts empty stdout and an explicit success marker", async (t) => {
+test("Windows rename-only metadata normalizes empty, scalar and array success output", async (t) => {
 	const { winMetadata } = await import("../scripts/managed-skills-backup-restore.mjs");
 	let stdout = "";
 	t.mock.method(process.getBuiltinModule("child_process"), "spawnSync", () => ({
@@ -82,8 +82,33 @@ test("Windows rename-only metadata accepts empty stdout and an explicit success 
 	assert.deepEqual(winMetadata(requests), []);
 	stdout = "\r\n";
 	assert.deepEqual(winMetadata(requests), []);
+	stdout = '"renamed"\r\n';
+	assert.deepEqual(winMetadata(requests), ["renamed"]);
 	stdout = '["renamed"]\r\n';
 	assert.deepEqual(winMetadata(requests), ["renamed"]);
+});
+
+test("Windows metadata normalizes a single ACL and preserves arrays in request order", async (t) => {
+	const { winMetadata } = await import("../scripts/managed-skills-backup-restore.mjs");
+	const acl = "O:SYG:SYD:P(A;;FA;;;SY)";
+	let stdout = JSON.stringify(acl);
+	t.mock.method(process.getBuiltinModule("child_process"), "spawnSync", () => ({
+		status: 0,
+		stdout,
+	}));
+	syncBuiltinESMExports();
+	t.after(() => {
+		t.mock.restoreAll();
+		syncBuiltinESMExports();
+	});
+	assert.deepEqual(winMetadata([{ path: "source" }]), [acl]);
+	stdout = JSON.stringify([acl]);
+	assert.deepEqual(winMetadata([{ path: "source" }]), [acl]);
+	stdout = JSON.stringify(["renamed", acl]);
+	assert.deepEqual(
+		winMetadata([{ path: "source", destination: "destination" }, { path: "destination" }]),
+		["renamed", acl],
+	);
 });
 
 test("Windows metadata still rejects native failures, malformed JSON and missing ACL output", async (t) => {
@@ -107,7 +132,7 @@ test("Windows metadata still rejects native failures, malformed JSON and missing
 });
 
 if (process.platform === "win32") {
-	test("Windows PowerShell returns a JSON success marker after a native root rename", async (t) => {
+	test("Windows metadata returns a success array after a native PowerShell root rename", async (t) => {
 		const paths = fixture();
 		t.after(() => rmSync(paths.root, { recursive: true, force: true }));
 		const { winMetadata } = await import("../scripts/managed-skills-backup-restore.mjs");

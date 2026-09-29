@@ -24,14 +24,14 @@ choisi n’ont pas une preuve applicable au candidat.
 
 Les sorties finales, compteurs et restrictions sont consignés après exécution dans ce tableau.
 `PASS local` ne signifie jamais PASS Windows, Linux, lecteur d’écran ou agent réel.
-Après correction de revue du renommage Windows, A1–A4 ont été rejoués sur
-`35fd667a26a83e4b968a95060510b70d82584c2a` avec le diff de correction : résultats ci-dessous,
-journaux dans la sortie `resumed/ci-2-review-1-correction`. A5 reste l’inspection historique,
+Après seconde correction de revue du contrat de sortie Windows, A1–A4 ont été rejoués sur
+`e3d4a04dc772020bb0ec2ba1623db1ea2a8560fd` avec le diff de correction : résultats ci-dessous,
+journaux dans la sortie `resumed/ci-2-review-2-correction`. A5 reste l’inspection historique,
 non réexécutée pendant cette correction.
 
 | ID | Commande / inspection | Résultat courant et portée |
 | --- | --- | --- |
-| A1 | `pnpm format:check && pnpm build && cargo test --manifest-path src-tauri/Cargo.toml --locked && node --test --experimental-strip-types tests/*.test.ts` | **Format et build PASS ; Cargo 89 unitaires PASS / 4 échecs socket sandbox, code 101.** La chaîne s’arrête avant Node. Exécution complète `--no-fail-fast` : **144 PASS / 4 mêmes échecs**, aucun test ignoré. Node lancé séparément : **53/53 PASS**. Voir `factory-validation.log`, `rust-all.log`, `node-validation.log`. |
+| A1 | `pnpm format:check && pnpm build && cargo test --manifest-path src-tauri/Cargo.toml --locked && node --test --experimental-strip-types tests/*.test.ts` | **Format et build PASS ; Cargo 89 unitaires PASS / 4 échecs socket sandbox, code 101.** La chaîne s’arrête avant Node. Exécution complète `--no-fail-fast` : **144 PASS / 4 mêmes échecs**, aucun test ignoré. Node lancé séparément : **54/54 PASS**. Voir `factory-validation.log`, `rust-all.log`, `node-validation.log`. |
 | A2 | `pnpm test:frontend` | **72/72 PASS, 18 fichiers**, DOM jsdom/IPC simulé seulement ; `frontend-validation.log`. |
 | A3 | `cargo check --manifest-path src-tauri/Cargo.toml --locked` | **PASS**, `cargo-check.log`, compilation macOS arm64 uniquement. |
 | A4 | `bash scripts/check-release-notarization.sh` | **PASS**, présence des commandes, pas notarisation réelle ; sortie « Release workflow contains macOS notarization hooks. ». |
@@ -229,15 +229,30 @@ accepte aussi une stdout vide uniquement pour un lot exclusivement de renommages
 Le test portable reproduit d’abord `SyntaxError: Unexpected end of JSON input`
 (`rename-output-red.log`), puis les **12/12 tests** de sauvegarde/restauration passent
 (`rename-output-green.log`). Ces deux nouveaux tests simulent seulement la sortie du processus.
-Un test réservé Windows vérifie en plus le tableau JSON `["renamed"]` renvoyé par le vrai
-`powershell.exe`, la disparition de la source et la conservation du contenu déplacé. Les
-tests existants de restauration, d’activation et de reprise restent inchangés. Ce test natif
+Un test réservé Windows vérifie en plus le tableau `["renamed"]` renvoyé par `winMetadata`
+après appel au vrai `powershell.exe`, la disparition de la source et la conservation du contenu
+déplacé. Les tests existants de restauration, d’activation et de reprise restent inchangés. Ce test natif
 ne s’exécute pas sur macOS et doit passer en CI Windows avant de conclure sur N1/N5.
 
-Validation locale : A1–A4 ci-dessus, **53/53 Node**, **72/72 Vitest**, **144 PASS Rust et
+Validation locale de cette première correction : **53/53 Node**, **72/72 Vitest**, **144 PASS Rust et
 quatre refus de sockets sandbox**, `cargo check` et garde notarisation PASS. Relecture
 indépendante du diff : aucun défaut bloquant relevé. La release reste **NO-GO** et les
 campagnes Windows/NTFS et natives demeurent nécessaires.
+
+Correction après seconde revue du contrat de sortie (`resumed/ci-2-review-2-correction`) :
+PowerShell peut sérialiser un résultat unique en scalaire JSON (`"renamed"` ou une ACL),
+au lieu d’un tableau. `winMetadata` normalise désormais le résultat parsé en tableau ; les
+tableaux existants conservent leur ordre. Le test Windows porte sur ce contrat normalisé,
+sans imposer la forme brute de stdout. Les refus de sortie ACL vide, de JSON malformé et
+d’échec natif restent inchangés.
+
+Les mocks portables reproduisent d’abord les deux écarts chaîne/tableau pour le marqueur et
+l’ACL (`metadata-output-red.log`, **2 échecs attendus**). Après correction, les **13/13 tests**
+de sauvegarde/restauration passent (`metadata-output-green.log`), avec les formes scalaire,
+tableau singleton et tableau mixte. Ces mocks ne prouvent pas le runtime PowerShell 5.1 :
+le test natif doit encore passer en CI Windows et la release reste **NO-GO**.
+La relecture indépendante du correctif n’a relevé aucun défaut bloquant. Les résultats
+complets de cette seconde correction sont consignés dans A1–A4.
 
 ## N2 — Campagne native isolée et découverte des agents
 

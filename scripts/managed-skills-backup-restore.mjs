@@ -195,7 +195,9 @@ export function winMetadata(requests) {
 	);
 	// Windows PowerShell 5.1 can emit nothing for a void-only pipeline; ACLs still require JSON.
 	if (!result && requests.every((request) => typeof request.destination === "string")) return [];
-	return JSON.parse(result);
+	// PowerShell can serialize a single result as a scalar instead of an array.
+	const values = JSON.parse(result);
+	return Array.isArray(values) ? values : [values];
 }
 
 function renameRoot(source, destination) {
