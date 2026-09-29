@@ -14,6 +14,7 @@ import {
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { join, parse, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -63,6 +64,62 @@ function run(command: string, paths: ReturnType<typeof fixture>, extra: string[]
 function success(result: ReturnType<typeof run>) {
 	assert.equal(result.status, 0, result.stderr);
 	return JSON.parse(result.stdout);
+}
+
+test("Windows rename-only metadata accepts empty stdout and an explicit success marker", async (t) => {
+	const { winMetadata } = await import("../scripts/managed-skills-backup-restore.mjs");
+	let stdout = "";
+	t.mock.method(process.getBuiltinModule("child_process"), "spawnSync", () => ({
+		status: 0,
+		stdout,
+	}));
+	syncBuiltinESMExports();
+	t.after(() => {
+		t.mock.restoreAll();
+		syncBuiltinESMExports();
+	});
+	const requests = [{ path: "source", destination: "destination" }];
+	assert.deepEqual(winMetadata(requests), []);
+	stdout = "\r\n";
+	assert.deepEqual(winMetadata(requests), []);
+	stdout = '["renamed"]\r\n';
+	assert.deepEqual(winMetadata(requests), ["renamed"]);
+});
+
+test("Windows metadata still rejects native failures, malformed JSON and missing ACL output", async (t) => {
+	const { winMetadata } = await import("../scripts/managed-skills-backup-restore.mjs");
+	let status = 1;
+	let stdout = "";
+	t.mock.method(process.getBuiltinModule("child_process"), "spawnSync", () => ({ status, stdout }));
+	syncBuiltinESMExports();
+	t.after(() => {
+		t.mock.restoreAll();
+		syncBuiltinESMExports();
+	});
+	const rename = { path: "source", destination: "destination" };
+	assert.throws(() => winMetadata([rename]), /Required native metadata operation failed/);
+	status = 0;
+	assert.throws(() => winMetadata([{ path: "source" }]), SyntaxError);
+	assert.throws(() => winMetadata([{ path: "source", acl: "private" }]), SyntaxError);
+	assert.throws(() => winMetadata([rename, { path: "source" }]), SyntaxError);
+	stdout = "invalid JSON";
+	assert.throws(() => winMetadata([rename]), SyntaxError);
+});
+
+if (process.platform === "win32") {
+	test("Windows PowerShell returns a JSON success marker after a native root rename", async (t) => {
+		const paths = fixture();
+		t.after(() => rmSync(paths.root, { recursive: true, force: true }));
+		const { winMetadata } = await import("../scripts/managed-skills-backup-restore.mjs");
+		const source = join(paths.home, ".skillreg");
+		const destination = join(paths.root, "renamed");
+		assert.deepEqual(winMetadata([{ path: source, destination }]), ["renamed"]);
+		assert.equal(existsSync(source), false);
+		assert.equal(
+			readFileSync(join(destination, "config.json"), "utf8"),
+			'{"token":"fixture-access"}',
+		);
+	});
 }
 
 test("complete snapshot restores files, permissions and external links, preserving later data separately", (t) => {

@@ -24,13 +24,14 @@ choisi n’ont pas une preuve applicable au candidat.
 
 Les sorties finales, compteurs et restrictions sont consignés après exécution dans ce tableau.
 `PASS local` ne signifie jamais PASS Windows, Linux, lecteur d’écran ou agent réel.
-Après correction de revue, A1–A4 ont été rejoués sur `ca96678783c941951ac55f9494bc7877af7ec9d4`
-avec le diff de correction : mêmes résultats ci-dessous, journaux dans la sortie
-`reprise-1/review-1-correction`. A5 reste l’inspection de l’étape précédente.
+Après correction de revue du renommage Windows, A1–A4 ont été rejoués sur
+`35fd667a26a83e4b968a95060510b70d82584c2a` avec le diff de correction : résultats ci-dessous,
+journaux dans la sortie `resumed/ci-2-review-1-correction`. A5 reste l’inspection historique,
+non réexécutée pendant cette correction.
 
 | ID | Commande / inspection | Résultat courant et portée |
 | --- | --- | --- |
-| A1 | `pnpm format:check && pnpm build && cargo test --manifest-path src-tauri/Cargo.toml --locked && node --test --experimental-strip-types tests/*.test.ts` | **Format et build PASS ; Cargo 89 unitaires PASS / 4 échecs socket sandbox, code 101.** La chaîne s’arrête avant Node. Exécution complète `--no-fail-fast` : **144 PASS / 4 mêmes échecs**, aucun test ignoré. Node lancé séparément : **51/51 PASS**. Voir `factory-validation.log`, `rust-validation.log`, `node-validation.log`. |
+| A1 | `pnpm format:check && pnpm build && cargo test --manifest-path src-tauri/Cargo.toml --locked && node --test --experimental-strip-types tests/*.test.ts` | **Format et build PASS ; Cargo 89 unitaires PASS / 4 échecs socket sandbox, code 101.** La chaîne s’arrête avant Node. Exécution complète `--no-fail-fast` : **144 PASS / 4 mêmes échecs**, aucun test ignoré. Node lancé séparément : **53/53 PASS**. Voir `factory-validation.log`, `rust-all.log`, `node-validation.log`. |
 | A2 | `pnpm test:frontend` | **72/72 PASS, 18 fichiers**, DOM jsdom/IPC simulé seulement ; `frontend-validation.log`. |
 | A3 | `cargo check --manifest-path src-tauri/Cargo.toml --locked` | **PASS**, `cargo-check.log`, compilation macOS arm64 uniquement. |
 | A4 | `bash scripts/check-release-notarization.sh` | **PASS**, présence des commandes, pas notarisation réelle ; sortie « Release workflow contains macOS notarization hooks. ». |
@@ -188,7 +189,7 @@ les quatre refus de sockets décrits en A1 ; `cargo test --no-fail-fast` termine
 `rust-all.log`, `node-factory-final.log`, `frontend.log`, `cargo-check.log`.
 La reproduction de la commande CI `pnpm test:node` passe aussi (`node-after.log`).
 
-État courant après le run `36500167005`, job `109188868949` : **renommage Windows corrigé,
+Correction après le run `36500167005`, job `109188868949` : **renommage Windows corrigé,
 confirmation CI requise**. Le diff fourni localise maintenant la divergence dans la seule
 racine conservée `.skillreg` : DACL héritée devenue protégée (`D:P`), ACE héritées devenues
 explicites (perte des marqueurs `ID`), enfants inchangés. Les clones passent leur vérification
@@ -217,6 +218,26 @@ Revue indépendante du correctif : aucun défaut bloquant relevé ; la compilati
 ACL NTFS restent à confirmer en CI Windows. Journaux : `factory-validation.log`,
 `node-before-fix.log`, `node-after-fix.log`, `node-factory.log`, `frontend.log`, `rust-all.log`,
 `cargo-check.log`.
+
+Correction après revue du contrat de sortie (`resumed/ci-2-review-1-correction`) : le
+branchement PowerShell appelait une méthode `void`, puis tentait de sérialiser un pipeline
+vide. Sous PowerShell 5.1, une stdout vide pouvait faire échouer `JSON.parse` après le
+déplacement réussi. Le branchement émet maintenant `renamed` après succès ; `winMetadata`
+accepte aussi une stdout vide uniquement pour un lot exclusivement de renommages. Les
+échecs natifs, JSON malformés et sorties ACL absentes (y compris lots mixtes) restent refusés.
+
+Le test portable reproduit d’abord `SyntaxError: Unexpected end of JSON input`
+(`rename-output-red.log`), puis les **12/12 tests** de sauvegarde/restauration passent
+(`rename-output-green.log`). Ces deux nouveaux tests simulent seulement la sortie du processus.
+Un test réservé Windows vérifie en plus le tableau JSON `["renamed"]` renvoyé par le vrai
+`powershell.exe`, la disparition de la source et la conservation du contenu déplacé. Les
+tests existants de restauration, d’activation et de reprise restent inchangés. Ce test natif
+ne s’exécute pas sur macOS et doit passer en CI Windows avant de conclure sur N1/N5.
+
+Validation locale : A1–A4 ci-dessus, **53/53 Node**, **72/72 Vitest**, **144 PASS Rust et
+quatre refus de sockets sandbox**, `cargo check` et garde notarisation PASS. Relecture
+indépendante du diff : aucun défaut bloquant relevé. La release reste **NO-GO** et les
+campagnes Windows/NTFS et natives demeurent nécessaires.
 
 ## N2 — Campagne native isolée et découverte des agents
 

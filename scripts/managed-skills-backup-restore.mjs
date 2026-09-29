@@ -168,6 +168,7 @@ $requests = [System.IO.StreamReader]::new([Console]::OpenStandardInput(), [Syste
 $results = @($requests | ForEach-Object {
   if ($null -ne $_.destination) {
     [ProfileMetadata]::Rename($_.path, $_.destination)
+    'renamed'
   } else {
     $replacement = $_.acl
     if ($replacement -eq 'private') {
@@ -180,7 +181,7 @@ $results = @($requests | ForEach-Object {
 ConvertTo-Json -InputObject $results -Compress
 `;
 
-function winMetadata(requests) {
+export function winMetadata(requests) {
 	if (!requests.length) return [];
 	const result = native(
 		"powershell.exe",
@@ -192,6 +193,8 @@ function winMetadata(requests) {
 		],
 		JSON.stringify(requests),
 	);
+	// Windows PowerShell 5.1 can emit nothing for a void-only pipeline; ACLs still require JSON.
+	if (!result && requests.every((request) => typeof request.destination === "string")) return [];
 	return JSON.parse(result);
 }
 
