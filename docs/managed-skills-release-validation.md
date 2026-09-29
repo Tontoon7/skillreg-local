@@ -164,7 +164,7 @@ Une compilation macOS arm64 locale
 ne complète aucune ligne Windows/Linux/x64. Le compte administrateur du runner Windows ne
 remplace pas N5.
 
-État courant après le run `36498903145`, job `109184823362` : **correctif Windows à rejouer**.
+Correction précédente après le run `36498903145`, job `109184823362` : **Windows à rejouer**.
 Le reporter donne désormais deux erreurs précises : chargement impossible du module de
 `Get-Acl` dans la fixture, et inventaire divergent lors de la reprise après activation.
 Les scripts ACL Node et Rust importent explicitement `Microsoft.PowerShell.Security` depuis
@@ -187,6 +187,36 @@ les quatre refus de sockets décrits en A1 ; `cargo test --no-fail-fast` termine
 **144 PASS / 4 mêmes échecs**, aucun test ignoré. Journaux : `factory-validation.log`,
 `rust-all.log`, `node-factory-final.log`, `frontend.log`, `cargo-check.log`.
 La reproduction de la commande CI `pnpm test:node` passe aussi (`node-after.log`).
+
+État courant après le run `36500167005`, job `109188868949` : **renommage Windows corrigé,
+confirmation CI requise**. Le diff fourni localise maintenant la divergence dans la seule
+racine conservée `.skillreg` : DACL héritée devenue protégée (`D:P`), ACE héritées devenues
+explicites (perte des marqueurs `ID`), enfants inchangés. Les clones passent leur vérification
+avant ce déplacement ; la modification du clonage dans l’étape précédente ne résolvait donc
+pas le défaut du renommage.
+
+Les deux swaps de racines utilisent désormais `SetFileInformationByHandle(FileRenameInfo)`
+sur Windows, avec le droit `DELETE` et les flags d’ouverture `OPEN_REPARSE_POINT` et
+`BACKUP_SEMANTICS`. Cette opération conserve le descripteur sans étape de réparation ACL
+après déplacement, refuse une destination existante et agit sur la junction elle-même.
+Le journal garde son renommage habituel. La comparaison intégrale des inventaires et le refus
+d’un état ambigu restent inchangés. Une récupération déjà altérée par l’ancien renommage
+reste à inspecter ; elle n’est pas réparée automatiquement.
+
+Les tests comparent aussi l’inventaire conservé après le premier déplacement, avant activation,
+et couvrent une racine fichier, une racine junction et un mélange de DACL héritées/protégées.
+La reproduction locale `pnpm test:node` passe avant correction sur macOS ; le journal Windows
+fourni constitue la preuve d’échec, sans reproduction Windows locale. Aucun workflow ni
+contrôle assoupli ; N1 reste ouverte et la release **NO-GO**.
+
+Validation locale de cette correction (`resumed/ci-2-correction`) : format/build PASS,
+Node **51/51** via la commande CI et la commande usine, Vitest **72/72**, `cargo check` PASS.
+La chaîne bloquante s’arrête sur les quatre refus de sockets décrits en A1 ;
+`cargo test --no-fail-fast` termine avec **144 PASS / 4 mêmes échecs**, aucun test ignoré.
+Revue indépendante du correctif : aucun défaut bloquant relevé ; la compilation C# et les
+ACL NTFS restent à confirmer en CI Windows. Journaux : `factory-validation.log`,
+`node-before-fix.log`, `node-after-fix.log`, `node-factory.log`, `frontend.log`, `rust-all.log`,
+`cargo-check.log`.
 
 ## N2 — Campagne native isolée et découverte des agents
 
@@ -268,6 +298,13 @@ leur cible. Une interruption avant création du journal ne modifie pas le profil
 récupération incomplète et utiliser un nouveau chemin après contrôle du profil. La reprise
 après interruption de processus autour des swaps est testée ; aucune résistance à une coupure
 électrique Windows n’est revendiquée.
+
+Sous Windows, les racines sont renommées par handle pour conserver les marqueurs d’héritage
+et de protection des DACL. Aucune réapplication des permissions ne suit le déplacement : une
+interruption peut reprendre à partir des inventaires exacts. Les junctions sont ouvertes sans
+suivre leur cible ; une destination apparue entre le contrôle et le renommage provoque un refus.
+Une récupération dont les ACL ont déjà été modifiées par une ancienne version est conservée
+et refusée comme ambiguë ; la corriger manuellement exige d’abord une inspection des copies.
 
 Protocole complet obligatoire :
 

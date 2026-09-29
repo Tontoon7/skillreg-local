@@ -194,6 +194,22 @@ test("an interrupted root swap resumes from the same verified journal without dr
 		readFileSync(join(paths.recovery, "data/.skillreg/config.json"), "utf8"),
 		"post-migration",
 	);
+	const moved = {
+		...paths,
+		home: join(paths.recovery, "moved"),
+		backup: join(paths.root, "moved-check"),
+	};
+	success(run("snapshot", moved));
+	const retained = JSON.parse(readFileSync(join(moved.backup, "inventory.json"), "utf8"));
+	const before = JSON.parse(readFileSync(join(paths.recovery, "inventory.json"), "utf8"));
+	assert.deepEqual(
+		retained.entries,
+		before.entries.filter(
+			(entry: { path: string }) =>
+				entry.path === ".skillreg" || entry.path.startsWith(".skillreg/"),
+		),
+		"The retained inventory changed before activation",
+	);
 	success(run("restore", paths, ["--apply", "--recovery", paths.recovery]));
 	assert.equal(
 		readFileSync(join(paths.home, ".skillreg/config.json"), "utf8"),
@@ -242,7 +258,7 @@ test("a changed profile after interruption is rejected without overwriting the n
 	);
 });
 
-test("a root that is a link stays a link and never copies its external contents", (t) => {
+test("file and link roots retain their metadata without changing external contents", (t) => {
 	const paths = fixture();
 	t.after(() => rmSync(paths.root, { recursive: true, force: true }));
 	symlinkSync(
@@ -250,6 +266,7 @@ test("a root that is a link stays a link and never copies its external contents"
 		join(paths.home, ".cursor"),
 		process.platform === "win32" ? "junction" : "dir",
 	);
+	writeFileSync(join(paths.home, ".codex"), "root file before restore");
 	success(run("snapshot", paths));
 	const inventory = JSON.parse(readFileSync(join(paths.backup, "inventory.json"), "utf8"));
 	assert.equal(
@@ -257,9 +274,21 @@ test("a root that is a link stays a link and never copies its external contents"
 		false,
 	);
 	assert.equal(realpathSync(join(paths.backup, "data/.cursor")), realpathSync(paths.external));
+	writeFileSync(join(paths.home, ".codex"), "root file after snapshot");
 	if (process.platform !== "win32") chmodSync(join(paths.home, ".skillreg/config.json"), 0o640);
 	success(run("restore", paths, ["--apply", "--recovery", paths.recovery]));
 	assert.equal(lstatSync(join(paths.home, ".cursor")).isSymbolicLink(), true);
+	assert.equal(realpathSync(join(paths.home, ".cursor")), realpathSync(paths.external));
+	assert.equal(readFileSync(join(paths.external, "SKILL.md"), "utf8"), "external untouched");
+	assert.equal(readFileSync(join(paths.home, ".codex"), "utf8"), "root file before restore");
+	assert.equal(
+		readFileSync(join(paths.recovery, "moved/.codex"), "utf8"),
+		"root file after snapshot",
+	);
+	const checked = { ...paths, backup: join(paths.root, "checked") };
+	success(run("snapshot", checked));
+	const restored = JSON.parse(readFileSync(join(checked.backup, "inventory.json"), "utf8"));
+	assert.deepEqual(restored.entries, inventory.entries);
 });
 
 test("hard links to files outside the profile are rejected before a snapshot is created", (t) => {
@@ -297,21 +326,29 @@ test("ACL metadata survives restoration and a linked backup data directory is re
 							"-NoProfile",
 							"-NonInteractive",
 							"-Command",
-							"$ErrorActionPreference='Stop'; $env:PSModulePath=$env:SKILLREG_TEST_MODULES + ';' + $env:PSModulePath; Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1'); $path=[System.IO.StreamReader]::new([Console]::OpenStandardInput(), [System.Text.Encoding]::UTF8).ReadToEnd(); $acl=Get-Acl -LiteralPath $path; $acl.SetAccessRuleProtection($true,$true); $sid=[System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-545'); $rule=[System.Security.AccessControl.FileSystemAccessRule]::new($sid,'Read','Allow'); $acl.AddAccessRule($rule); Set-Acl -LiteralPath $path -AclObject $acl",
+							"$ErrorActionPreference='Stop'; $env:PSModulePath=$env:SKILLREG_TEST_MODULES + ';' + $env:PSModulePath; Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1'); $paths=[System.IO.StreamReader]::new([Console]::OpenStandardInput(), [System.Text.Encoding]::UTF8).ReadToEnd() | ConvertFrom-Json; foreach ($path in $paths) { $acl=Get-Acl -LiteralPath $path; $acl.SetAccessRuleProtection($true,$true); $sid=[System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-545'); $rule=[System.Security.AccessControl.FileSystemAccessRule]::new($sid,'Read','Allow'); $acl.AddAccessRule($rule); Set-Acl -LiteralPath $path -AclObject $acl }",
 						],
 						{
-							input: config,
+							input: JSON.stringify([config, join(paths.home, ".claude")]),
 							encoding: "utf8",
 							env: { ...process.env, SKILLREG_TEST_MODULES: modules },
 						},
 					);
 	assert.equal(acl.status, 0, acl.stderr);
 	success(run("snapshot", paths));
+	const before = JSON.parse(readFileSync(join(paths.backup, "inventory.json"), "utf8"));
+	if (process.platform === "win32") {
+		const aclOf = (path: string): string =>
+			before.entries.find((entry: { path: string }) => entry.path === path).acl;
+		assert.match(aclOf(".claude"), /D:P/);
+		assert.match(aclOf(".skillreg/config.json"), /D:P/);
+		assert.doesNotMatch(aclOf(".skillreg"), /D:P/);
+		assert.match(aclOf(".skillreg"), /\(A;[^;]*ID;/);
+	}
 	writeFileSync(config, "post-migration");
 	success(run("restore", paths, ["--apply", "--recovery", paths.recovery]));
 	const checked = { ...paths, backup: join(paths.root, "checked") };
 	success(run("snapshot", checked));
-	const before = JSON.parse(readFileSync(join(paths.backup, "inventory.json"), "utf8"));
 	const after = JSON.parse(readFileSync(join(checked.backup, "inventory.json"), "utf8"));
 	assert.deepEqual(after.entries, before.entries);
 	rmSync(join(paths.backup, "data"), { recursive: true });

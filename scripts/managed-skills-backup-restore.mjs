@@ -95,16 +95,25 @@ function native(command, args, input) {
 }
 
 // Handles opened with OPEN_REPARSE_POINT operate on junctions themselves, never their targets.
-const windowsSecurity = String.raw`
+const windowsMetadata = String.raw`
 $ErrorActionPreference = 'Stop'
 Add-Type -TypeDefinition @'
 using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
-public static class ProfileAcl {
+public static class ProfileMetadata {
+  [StructLayout(LayoutKind.Sequential)]
+  struct RenameInfo {
+    public uint Flags;
+    public IntPtr RootDirectory;
+    public uint FileNameLength;
+    public ushort FileName;
+  }
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
   static extern SafeFileHandle CreateFile(string name, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
+  [DllImport("kernel32.dll", SetLastError=true)]
+  static extern bool SetFileInformationByHandle(SafeFileHandle handle, int kind, IntPtr info, uint size);
   [DllImport("advapi32.dll", SetLastError=true)]
   static extern uint GetSecurityInfo(SafeFileHandle handle, uint kind, uint info, out IntPtr owner, out IntPtr group, out IntPtr dacl, out IntPtr sacl, out IntPtr descriptor);
   [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
@@ -114,6 +123,24 @@ public static class ProfileAcl {
   [DllImport("advapi32.dll", SetLastError=true)]
   static extern bool SetKernelObjectSecurity(SafeFileHandle handle, uint info, IntPtr descriptor);
   [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr value);
+  public static void Rename(string source, string destination) {
+    // MoveFileEx (used by Node) can convert inherited ACEs to protected, explicit ACEs.
+    // Rename by handle keeps the descriptor intact, with no post-rename ACL repair window.
+    using (var handle = CreateFile(source, 0x10000, 7, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero)) {
+      if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+      byte[] name = System.Text.Encoding.Unicode.GetBytes(destination);
+      int offset = Marshal.OffsetOf(typeof(RenameInfo), "FileName").ToInt32();
+      int size = Math.Max(Marshal.SizeOf(typeof(RenameInfo)), offset + name.Length);
+      IntPtr buffer = Marshal.AllocHGlobal(size);
+      try {
+        // Flags=0 refuses an existing destination; RootDirectory=0 uses the absolute path.
+        var info = new RenameInfo { Flags = 0, RootDirectory = IntPtr.Zero, FileNameLength = (uint)name.Length, FileName = 0 };
+        Marshal.StructureToPtr(info, buffer, false);
+        Marshal.Copy(name, 0, IntPtr.Add(buffer, offset), name.Length);
+        if (!SetFileInformationByHandle(handle, 3, buffer, (uint)size)) throw new Win32Exception(Marshal.GetLastWin32Error());
+      } finally { Marshal.FreeHGlobal(buffer); }
+    }
+  }
   public static string Access(string path, string replacement, bool write) {
     using (var handle = CreateFile(path, write ? 0x60000u : 0x20000u, 7, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero)) {
       if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -139,17 +166,21 @@ public static class ProfileAcl {
 '@
 $requests = [System.IO.StreamReader]::new([Console]::OpenStandardInput(), [System.Text.Encoding]::UTF8).ReadToEnd() | ConvertFrom-Json
 $results = @($requests | ForEach-Object {
-  $replacement = $_.acl
-  if ($replacement -eq 'private') {
-    $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    $replacement = 'D:P(A;OICI;FA;;;' + $sid + ')'
+  if ($null -ne $_.destination) {
+    [ProfileMetadata]::Rename($_.path, $_.destination)
+  } else {
+    $replacement = $_.acl
+    if ($replacement -eq 'private') {
+      $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+      $replacement = 'D:P(A;OICI;FA;;;' + $sid + ')'
+    }
+    [ProfileMetadata]::Access($_.path, $replacement, ($null -ne $_.acl))
   }
-  [ProfileAcl]::Access($_.path, $replacement, ($null -ne $_.acl))
 })
 ConvertTo-Json -InputObject $results -Compress
 `;
 
-function winAcl(requests) {
+function winMetadata(requests) {
 	if (!requests.length) return [];
 	const result = native(
 		"powershell.exe",
@@ -157,16 +188,21 @@ function winAcl(requests) {
 			"-NoProfile",
 			"-NonInteractive",
 			"-EncodedCommand",
-			Buffer.from(windowsSecurity, "utf16le").toString("base64"),
+			Buffer.from(windowsMetadata, "utf16le").toString("base64"),
 		],
 		JSON.stringify(requests),
 	);
 	return JSON.parse(result);
 }
 
+function renameRoot(source, destination) {
+	if (windows) winMetadata([{ path: source, destination }]);
+	else renameSync(source, destination);
+}
+
 function privateDirectory(path) {
 	mkdirSync(path, { mode: 0o700 });
-	if (windows) winAcl([{ path, acl: "private" }]);
+	if (windows) winMetadata([{ path, acl: "private" }]);
 	else if (process.platform === "darwin") native("/bin/chmod", ["-N", path]);
 	else native("setfacl", ["--remove-all", "--remove-default", "--", path]);
 	flushDirectory(dirname(path));
@@ -247,7 +283,7 @@ function inventory(base) {
 	}
 	for (const root of roots) visit(root);
 	if (windows) {
-		const acls = winAcl(entries.map((entry) => ({ path: join(base, entry.path) })));
+		const acls = winMetadata(entries.map((entry) => ({ path: join(base, entry.path) })));
 		entries.forEach((entry, index) => {
 			entry.acl = acls[index];
 		});
@@ -299,7 +335,7 @@ function clone(source, destination, entries) {
 		} else symlinkSync(entry.target, to, windows ? "junction" : undefined);
 	}
 	if (windows) {
-		winAcl(entries.map((entry) => ({ path: join(destination, entry.path), acl: entry.acl })));
+		winMetadata(entries.map((entry) => ({ path: join(destination, entry.path), acl: entry.acl })));
 	}
 	for (const entry of [...entries].reverse()) {
 		applySecurity(join(destination, entry.path), entry);
@@ -447,7 +483,7 @@ function restore(home, backup, recovery, target, afterRename) {
 		if (state === "done") continue;
 		if (state === "move" && stat(join(home, root))) {
 			during("Restore profile root", () => {
-				renameSync(join(home, root), join(recovery, "moved", root));
+				renameRoot(join(home, root), join(recovery, "moved", root));
 				flushDirectory(home);
 				flushDirectory(join(recovery, "moved"));
 				afterRename?.();
@@ -456,7 +492,7 @@ function restore(home, backup, recovery, target, afterRename) {
 		if (stat(join(recovery, "staged", root))) {
 			requireState(!stat(join(home, root)), "Restore destination reappeared during swap");
 			during("Restore activation", () => {
-				renameSync(join(recovery, "staged", root), join(home, root));
+				renameRoot(join(recovery, "staged", root), join(home, root));
 				flushDirectory(home);
 				flushDirectory(join(recovery, "staged"));
 				afterRename?.();
