@@ -115,7 +115,7 @@ public static class ProfileMetadata {
   [DllImport("kernel32.dll", SetLastError=true)]
   static extern bool SetFileInformationByHandle(SafeFileHandle handle, int kind, IntPtr info, uint size);
   [DllImport("advapi32.dll", SetLastError=true)]
-  static extern uint GetSecurityInfo(SafeFileHandle handle, uint kind, uint info, out IntPtr owner, out IntPtr group, out IntPtr dacl, out IntPtr sacl, out IntPtr descriptor);
+  static extern bool GetKernelObjectSecurity(SafeFileHandle handle, uint info, IntPtr descriptor, uint size, out uint required);
   [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
   static extern bool ConvertSecurityDescriptorToStringSecurityDescriptor(IntPtr descriptor, uint revision, uint info, out IntPtr value, out uint size);
   [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
@@ -124,8 +124,7 @@ public static class ProfileMetadata {
   static extern bool SetKernelObjectSecurity(SafeFileHandle handle, uint info, IntPtr descriptor);
   [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr value);
   public static void Rename(string source, string destination) {
-    // MoveFileEx (used by Node) can convert inherited ACEs to protected, explicit ACEs.
-    // Rename by handle keeps the descriptor intact, with no post-rename ACL repair window.
+    // Rename the object itself without a post-rename ACL repair window.
     using (var handle = CreateFile(source, 0x10000, 7, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero)) {
       if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
       byte[] name = System.Text.Encoding.Unicode.GetBytes(destination);
@@ -153,13 +152,19 @@ public static class ProfileMetadata {
           if (!SetKernelObjectSecurity(handle, flags, next)) throw new Win32Exception(Marshal.GetLastWin32Error());
         } finally { LocalFree(next); }
       }
-      IntPtr owner, group, dacl, sacl, descriptor, text; uint length;
-      uint error = GetSecurityInfo(handle, 1, 7, out owner, out group, out dacl, out sacl, out descriptor);
-      if (error != 0) throw new Win32Exception((int)error);
+      // Read the stored descriptor without interpreting inheritance against the current parent.
+      uint required;
+      if (!GetKernelObjectSecurity(handle, 7, IntPtr.Zero, 0, out required)) {
+        int error = Marshal.GetLastWin32Error();
+        if (error != 122) throw new Win32Exception(error);
+      }
+      IntPtr descriptor = Marshal.AllocHGlobal(checked((int)required));
       try {
+        if (!GetKernelObjectSecurity(handle, 7, descriptor, required, out required)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        IntPtr text; uint length;
         if (!ConvertSecurityDescriptorToStringSecurityDescriptor(descriptor, 1, 7, out text, out length)) throw new Win32Exception(Marshal.GetLastWin32Error());
         try { return Marshal.PtrToStringUni(text); } finally { LocalFree(text); }
-      } finally { LocalFree(descriptor); }
+      } finally { Marshal.FreeHGlobal(descriptor); }
     }
   }
 }

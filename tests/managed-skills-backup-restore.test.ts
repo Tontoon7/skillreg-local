@@ -132,18 +132,28 @@ test("Windows metadata still rejects native failures, malformed JSON and missing
 });
 
 if (process.platform === "win32") {
-	test("Windows metadata returns a success array after a native PowerShell root rename", async (t) => {
+	test("Windows native rename preserves inherited ACLs under a private parent and back", async (t) => {
 		const paths = fixture();
 		t.after(() => rmSync(paths.root, { recursive: true, force: true }));
 		const { winMetadata } = await import("../scripts/managed-skills-backup-restore.mjs");
 		const source = join(paths.home, ".skillreg");
-		const destination = join(paths.root, "renamed");
+		const parent = join(paths.root, "private parent été");
+		const destination = join(parent, ".skillreg");
+		mkdirSync(parent);
+		winMetadata([{ path: parent, acl: "private" }]);
+		const before = winMetadata([{ path: source }]);
+		assert.match(before[0], /\(A;[^;]*ID;/);
+		assert.doesNotMatch(before[0], /D:P/);
 		assert.deepEqual(winMetadata([{ path: source, destination }]), ["renamed"]);
 		assert.equal(existsSync(source), false);
+		assert.deepEqual(winMetadata([{ path: destination }]), before);
 		assert.equal(
 			readFileSync(join(destination, "config.json"), "utf8"),
 			'{"token":"fixture-access"}',
 		);
+		assert.deepEqual(winMetadata([{ path: destination, destination: source }]), ["renamed"]);
+		assert.equal(existsSync(destination), false);
+		assert.deepEqual(winMetadata([{ path: source }]), before);
 	});
 }
 

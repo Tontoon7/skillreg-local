@@ -24,15 +24,15 @@ choisi n’ont pas une preuve applicable au candidat.
 
 Les sorties finales, compteurs et restrictions sont consignés après exécution dans ce tableau.
 `PASS local` ne signifie jamais PASS Windows, Linux, lecteur d’écran ou agent réel.
-Après seconde correction de revue du contrat de sortie Windows, A1–A4 ont été rejoués sur
-`e3d4a04dc772020bb0ec2ba1623db1ea2a8560fd` avec le diff de correction : résultats ci-dessous,
-journaux dans la sortie `resumed/ci-2-review-2-correction`. A5 reste l’inspection historique,
-non réexécutée pendant cette correction.
+Après correction de la lecture des ACL Windows, A1–A3 ont été rejoués sur `c2fbc91`
+avec le diff de correction : résultats ci-dessous, journaux dans la sortie
+`resumed/ci-3-correction`. A4–A5 restent les vérifications précédentes, non réexécutées
+pendant cette correction ; aucun workflow n’a changé.
 
 | ID | Commande / inspection | Résultat courant et portée |
 | --- | --- | --- |
-| A1 | `pnpm format:check && pnpm build && cargo test --manifest-path src-tauri/Cargo.toml --locked && node --test --experimental-strip-types tests/*.test.ts` | **Format et build PASS ; Cargo 89 unitaires PASS / 4 échecs socket sandbox, code 101.** La chaîne s’arrête avant Node. Exécution complète `--no-fail-fast` : **144 PASS / 4 mêmes échecs**, aucun test ignoré. Node lancé séparément : **54/54 PASS**. Voir `factory-validation.log`, `rust-all.log`, `node-validation.log`. |
-| A2 | `pnpm test:frontend` | **72/72 PASS, 18 fichiers**, DOM jsdom/IPC simulé seulement ; `frontend-validation.log`. |
+| A1 | `pnpm format:check && pnpm build && cargo test --manifest-path src-tauri/Cargo.toml --locked && node --test --experimental-strip-types tests/*.test.ts` | **Format et build PASS ; Cargo 89 unitaires PASS / 4 échecs socket sandbox, code 101.** La chaîne s’arrête avant Node. Exécution complète `--no-fail-fast` : **144 PASS / 4 mêmes échecs**, aucun test ignoré. Node lancé séparément : **54/54 PASS**. Voir `factory-validation.log`, `rust-all.log`, `node-factory.log`. |
+| A2 | `pnpm test:frontend` | **72/72 PASS, 18 fichiers**, DOM jsdom/IPC simulé seulement ; `frontend.log`. |
 | A3 | `cargo check --manifest-path src-tauri/Cargo.toml --locked` | **PASS**, `cargo-check.log`, compilation macOS arm64 uniquement. |
 | A4 | `bash scripts/check-release-notarization.sh` | **PASS**, présence des commandes, pas notarisation réelle ; sortie « Release workflow contains macOS notarization hooks. ». |
 | A5 | Erreurs synthétiques, recherche Sentry, inspection de `dist/` | **PASS local limité** : tests synthétiques frontend/Rust verts ; 6 fichiers `dist/`, 0 sourcemap, 0 détection de valeur token/clé privée/URL signée/chemin personnel/fixture. Aucune intégration Sentry trouvée dans sources et dépendances. `privacy-inspection.json` ; aucune inspection de service externe. |
@@ -189,19 +189,19 @@ les quatre refus de sockets décrits en A1 ; `cargo test --no-fail-fast` termine
 `rust-all.log`, `node-factory-final.log`, `frontend.log`, `cargo-check.log`.
 La reproduction de la commande CI `pnpm test:node` passe aussi (`node-after.log`).
 
-Correction après le run `36500167005`, job `109188868949` : **renommage Windows corrigé,
-confirmation CI requise**. Le diff fourni localise maintenant la divergence dans la seule
+Correction après le run `36500167005`, job `109188868949` : **renommage Windows remplacé,
+divergence toujours présente au run suivant**. Le diff fourni localise la divergence dans la seule
 racine conservée `.skillreg` : DACL héritée devenue protégée (`D:P`), ACE héritées devenues
 explicites (perte des marqueurs `ID`), enfants inchangés. Les clones passent leur vérification
 avant ce déplacement ; la modification du clonage dans l’étape précédente ne résolvait donc
-pas le défaut du renommage.
+pas la divergence observée après déplacement.
 
-Les deux swaps de racines utilisent désormais `SetFileInformationByHandle(FileRenameInfo)`
+Les deux swaps de racines utilisent `SetFileInformationByHandle(FileRenameInfo)`
 sur Windows, avec le droit `DELETE` et les flags d’ouverture `OPEN_REPARSE_POINT` et
-`BACKUP_SEMANTICS`. Cette opération conserve le descripteur sans étape de réparation ACL
-après déplacement, refuse une destination existante et agit sur la junction elle-même.
+`BACKUP_SEMANTICS`. Ce choix vise à conserver le descripteur sans étape de réparation ACL
+après déplacement. Le renommage refuse une destination existante et agit sur la junction elle-même.
 Le journal garde son renommage habituel. La comparaison intégrale des inventaires et le refus
-d’un état ambigu restent inchangés. Une récupération déjà altérée par l’ancien renommage
+d’un état ambigu restent inchangés. Une récupération dont l’inventaire diverge
 reste à inspecter ; elle n’est pas réparée automatiquement.
 
 Les tests comparent aussi l’inventaire conservé après le premier déplacement, avant activation,
@@ -252,7 +252,29 @@ de sauvegarde/restauration passent (`metadata-output-green.log`), avec les forme
 tableau singleton et tableau mixte. Ces mocks ne prouvent pas le runtime PowerShell 5.1 :
 le test natif doit encore passer en CI Windows et la release reste **NO-GO**.
 La relecture indépendante du correctif n’a relevé aucun défaut bloquant. Les résultats
-complets de cette seconde correction sont consignés dans A1–A4.
+complets de cette seconde correction sont conservés dans `resumed/ci-2-review-2-correction`.
+
+Correction après le run `36502655614`, job `109196862004` : **lecture brute des ACL,
+confirmation Windows requise**. La racine conservée apparaît encore en `D:P` avec ses ACE
+héritées devenues explicites, malgré le renommage par handle ; les enfants restent identiques.
+Le journal ne prouve donc pas que le déplacement a modifié le descripteur stocké. La revue du
+chemin confirme qu’aucune écriture d’ACL ne cible cette racine pendant le swap ; la lecture
+`GetSecurityInfo` reste susceptible de présenter l’héritage selon le nouveau parent privé.
+
+La lecture utilise maintenant `GetKernelObjectSecurity`, symétrique de l’écriture existante,
+pour inventorier le descripteur brut de l’objet ouvert sans suivre les junctions. La requête de
+taille ne tolère que `ERROR_INSUFFICIENT_BUFFER` ; les erreurs de lecture restent bloquantes.
+Aucune normalisation de DACL, réparation après déplacement ou comparaison assouplie n’est ajoutée.
+Le test natif Windows compare exactement les ACL héritées avant/après déplacement sous parent
+privé, puis retour au profil. Les tests de clonage, DACL protégées, junctions et reprise après
+interruption restent requis. Une ancienne sauvegarde dont l’inventaire diffère de la lecture
+brute sera refusée par `verify` ; ne pas modifier ses ACL pour forcer son acceptation.
+
+Le lien causal avec `GetSecurityInfo` reste à confirmer sur Windows : aucun runtime NTFS ou
+PowerShell 5.1 n’est disponible dans cette session macOS. `pnpm test:node` passe avant et après
+correction (**54/54**, `node-before.log`, `node-after.log`) ; ce n’est pas une reproduction
+rouge/verte Windows. La revue indépendante n’a relevé aucun défaut concret du correctif.
+Les résultats locaux complets figurent dans A1–A3 ; N1 reste ouverte et la release **NO-GO**.
 
 ## N2 — Campagne native isolée et découverte des agents
 
@@ -335,12 +357,16 @@ récupération incomplète et utiliser un nouveau chemin après contrôle du pro
 après interruption de processus autour des swaps est testée ; aucune résistance à une coupure
 électrique Windows n’est revendiquée.
 
-Sous Windows, les racines sont renommées par handle pour conserver les marqueurs d’héritage
-et de protection des DACL. Aucune réapplication des permissions ne suit le déplacement : une
+Sous Windows, les racines sont renommées par handle et leurs descripteurs sont lus bruts par
+`GetKernelObjectSecurity`, afin de comparer les marqueurs d’héritage et de protection sans
+interprétation selon le parent. La conservation exacte doit encore être confirmée en CI Windows.
+Aucune réapplication des permissions ne suit le déplacement : une
 interruption peut reprendre à partir des inventaires exacts. Les junctions sont ouvertes sans
 suivre leur cible ; une destination apparue entre le contrôle et le renommage provoque un refus.
-Une récupération dont les ACL ont déjà été modifiées par une ancienne version est conservée
-et refusée comme ambiguë ; la corriger manuellement exige d’abord une inspection des copies.
+Une sauvegarde ou récupération dont les descripteurs diffèrent de l’inventaire est conservée
+et refusée comme ambiguë, y compris avec un inventaire issu de l’ancienne lecture d’ACL.
+Ne pas convertir cet inventaire ni modifier les permissions pour forcer une reprise ; inspecter
+d’abord les copies et vérifier une sauvegarde complète avant toute migration.
 
 Protocole complet obligatoire :
 
