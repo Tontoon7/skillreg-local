@@ -139,6 +139,14 @@ public static class ProfileMetadata {
   static extern bool ConvertStringSecurityDescriptorToSecurityDescriptor(string value, uint revision, out IntPtr descriptor, out uint size);
   [DllImport("advapi32.dll", SetLastError=true)]
   static extern bool SetKernelObjectSecurity(SafeFileHandle handle, uint info, IntPtr descriptor);
+  [DllImport("advapi32.dll", SetLastError=true)]
+  static extern bool GetSecurityDescriptorOwner(IntPtr descriptor, out IntPtr owner, out bool defaulted);
+  [DllImport("advapi32.dll", SetLastError=true)]
+  static extern bool GetSecurityDescriptorGroup(IntPtr descriptor, out IntPtr group, out bool defaulted);
+  [DllImport("advapi32.dll", SetLastError=true)]
+  static extern bool GetSecurityDescriptorDacl(IntPtr descriptor, out bool present, out IntPtr dacl, out bool defaulted);
+  [DllImport("advapi32.dll")]
+  static extern uint SetSecurityInfo(SafeFileHandle handle, int kind, uint info, IntPtr owner, IntPtr group, IntPtr dacl, IntPtr sacl);
   [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr value);
   public static void Rename(string source, string destination) {
     // Rename the object itself without a post-rename ACL repair window.
@@ -171,9 +179,18 @@ public static class ProfileMetadata {
         IntPtr next; uint size;
         if (!ConvertStringSecurityDescriptorToSecurityDescriptor(replacement, 1, out next, out size)) throw new Win32Exception(Marshal.GetLastWin32Error());
         try {
-          // Clones already allow inheritance. Do not request a fresh inheritance pass over the saved DACL.
-          if (replacement.Contains("D:P")) flags |= 0x80000000u;
-          if (!SetKernelObjectSecurity(handle, flags, next)) throw new Win32Exception(Marshal.GetLastWin32Error());
+          if (replacement.Contains("D:P")) {
+            // SetKernelObjectSecurity does not set file DACL protection. The file API must apply it explicitly.
+            IntPtr owner, group, dacl; bool defaulted, present;
+            if (!GetSecurityDescriptorOwner(next, out owner, out defaulted) ||
+                !GetSecurityDescriptorGroup(next, out group, out defaulted) ||
+                !GetSecurityDescriptorDacl(next, out present, out dacl, out defaulted)) throw new Win32Exception(Marshal.GetLastWin32Error());
+            uint error = SetSecurityInfo(handle, 1, flags | 0x80000000u, owner, group, dacl, IntPtr.Zero);
+            if (error != 0) throw new Win32Exception((int)error);
+          } else {
+            // New clones already allow inheritance; keep the saved ACEs without inheriting from the backup parent.
+            if (!SetKernelObjectSecurity(handle, flags, next)) throw new Win32Exception(Marshal.GetLastWin32Error());
+          }
         } finally { LocalFree(next); }
       }
       // Read the stored descriptor without interpreting inheritance against the current parent.

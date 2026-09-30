@@ -24,9 +24,9 @@ choisi n’ont pas une preuve applicable au candidat.
 
 Les sorties finales, compteurs et restrictions sont consignés après exécution dans ce tableau.
 `PASS local` ne signifie jamais PASS Windows, Linux, lecteur d’écran ou agent réel.
-Après correction de la copie des descripteurs et du buffer de renommage Windows, A1–A3 ont été rejoués sur `26258ed`
+Après correction des fixtures héritées et de la copie des DACL protégées Windows, A1–A3 ont été rejoués sur `74c8312`
 avec le diff de correction : résultats ci-dessous, journaux dans la sortie
-`recovery-1/ci-1-correction`. A4–A5 restent les vérifications précédentes, non réexécutées
+`recovery-1/ci-2-correction`. A4–A5 restent les vérifications précédentes, non réexécutées
 pendant cette correction ; aucun workflow n’a changé.
 
 | ID | Commande / inspection | Résultat courant et portée |
@@ -303,6 +303,32 @@ champs supplémentaires ou une valeur invalide. Aucun workflow ni contrôle n’
 Résultats locaux courants : A1–A3. La revue indépendante n’a relevé aucun défaut bloquant.
 Rejouer la CI Windows sur le SHA livré ; N1/N5 restent ouvertes et la release **NO-GO**.
 
+Correction après le run `36671892076`, job `109748471193` : **fixture héritée et copie des
+DACL protégées corrigées ; confirmation Windows requise**. Le test de renommage échoue
+avant tout déplacement : le descripteur de la fixture ne contient aucune ACE `ID`. Le test
+ACL échoue dès le snapshot, sur l’entrée 1 (`.skillreg/config.json`) à DACL protégée ; le
+message identifie le champ `acl`, sans publier sa valeur. Les autres helpers donnent 55 PASS.
+
+La fixture Windows définit maintenant sur son propre home une DACL protégée avec une ACE
+`FullControl` héritée par les dossiers et fichiers enfants pour le SID courant, **avant** de
+créer ces enfants. L’existence d’ACE `ID` ne dépend plus des permissions du checkout ; les
+assertions d’héritage et les comparaisons intégrales restent obligatoires.
+
+`SetKernelObjectSecurity` ne permet pas de définir la protection d’une DACL de fichier.
+Les descripteurs protégés sont écrits via `SetSecurityInfo` avec
+`PROTECTED_DACL_SECURITY_INFORMATION`, en conservant propriétaire et groupe présents.
+Le code Win32 de retour est vérifié directement. Pour les descripteurs non protégés,
+l’écriture brute reste utilisée sans demander un nouveau calcul d’héritage depuis le
+parent privé de la sauvegarde. Les handles continuent d’ouvrir les junctions elles-mêmes.
+Un test natif supplémentaire vérifie que `private` protège réellement le fichier, puis
+que la copie du descripteur sous un autre parent reste exacte après réouverture et snapshot.
+
+Les tests Windows ne s’exécutent pas sur macOS ; leurs échecs sont démontrés par le journal
+CI fourni, pas reproduits localement. La valeur divergente du descripteur n’est pas disponible :
+le prochain run doit confirmer la conservation exacte, y compris les bits d’auto-héritage.
+Aucun workflow ni contrôle n’est assoupli. Résultats locaux courants : A1–A3 ; N1/N5 restent
+ouvertes et la release **NO-GO**.
+
 ## N2 — Campagne native isolée et découverte des agents
 
 Exécuter les scénarios 1–21 dans un compte OS de test dédié, avec un profil sauvegardé selon N4,
@@ -388,8 +414,10 @@ Sous Windows, les racines sont renommées par handle et leurs descripteurs sont 
 `GetKernelObjectSecurity`, afin de comparer les marqueurs d’héritage et de protection sans
 interprétation selon le parent. Le clonage restaure aussi propriétaire et groupe lorsqu’ils
 sont présents dans le descripteur ; les droits nécessaires doivent être disponibles, sinon
-la copie est refusée. Le nom UTF-16 du renommage est terminé explicitement, sans inclure le
-terminateur dans sa longueur. La conservation exacte doit encore être confirmée en CI Windows.
+la copie est refusée. Les DACL protégées sont appliquées via `SetSecurityInfo` par handle ;
+les autres sont copiées brutes sans recalcul d’héritage. Le nom UTF-16 du renommage est terminé
+explicitement, sans inclure le terminateur dans sa longueur. La conservation exacte doit encore
+être confirmée en CI Windows.
 Aucune réapplication des permissions ne suit le déplacement : une
 interruption peut reprendre à partir des inventaires exacts. Les junctions sont ouvertes sans
 suivre leur cible ; une destination apparue entre le contrôle et le renommage provoque un refus.

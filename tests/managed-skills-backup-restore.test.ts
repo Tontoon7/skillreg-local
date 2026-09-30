@@ -29,6 +29,28 @@ function fixture() {
 	const backup = join(root, "before");
 	const recovery = join(root, "after");
 	mkdirSync(home);
+	if (process.platform === "win32") {
+		// The checkout's ACL may contain no inherited ACEs; give this fixture its own parent DACL.
+		const acl = spawnSync(
+			"powershell.exe",
+			[
+				"-NoProfile",
+				"-NonInteractive",
+				"-Command",
+				`$ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1')
+$path = [System.IO.StreamReader]::new([Console]::OpenStandardInput(), [System.Text.Encoding]::UTF8).ReadToEnd()
+$acl = [System.Security.AccessControl.DirectorySecurity]::new()
+$acl.SetAccessRuleProtection($true, $false)
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+$acl.AddAccessRule($rule)
+Set-Acl -LiteralPath $path -AclObject $acl`,
+			],
+			{ input: home, encoding: "utf8" },
+		);
+		assert.equal(acl.status, 0, acl.stderr);
+	}
 	for (const directory of [
 		".skillreg/env",
 		".claude/skills/original",
@@ -163,6 +185,22 @@ test("Windows metadata reports only validated native error codes", async (t) => 
 });
 
 if (process.platform === "win32") {
+	test("Windows metadata applies and clones protected DACLs without parent inheritance", async (t) => {
+		const paths = fixture();
+		t.after(() => rmSync(paths.root, { recursive: true, force: true }));
+		const { winMetadata } = await import("../scripts/managed-skills-backup-restore.mjs");
+		const source = join(paths.home, ".skillreg/config.json");
+		const destination = join(paths.external, "copy.json");
+		const [before] = winMetadata([{ path: source, acl: "private" }]);
+		assert.match(before, /D:P/);
+		assert.doesNotMatch(before, /\(A;[^;]*ID;/);
+		writeFileSync(destination, "copy");
+		assert.deepEqual(winMetadata([{ path: destination, acl: before }]), [before]);
+		assert.deepEqual(winMetadata([{ path: destination }]), [before]);
+		success(run("snapshot", paths));
+		success(run("verify", paths));
+	});
+
 	test("Windows ACL cloning restores an explicit primary group", async (t) => {
 		const paths = fixture();
 		t.after(() => rmSync(paths.root, { recursive: true, force: true }));
