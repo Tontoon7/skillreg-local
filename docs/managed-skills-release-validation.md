@@ -11,10 +11,11 @@ choisi n’ont pas une preuve applicable au candidat.
 - Socle repris par patches ciblés : `bbfbe94df75a472221733374cfac8170e836e011`, delta depuis
   `3e024f35e721313dc88ce4496765853c800d4ec1`. Publication des commandes de la base conservée.
 - Candidat : base + diff de cette PR. Les journaux et l’empreinte des sources testées sont
-  conservés dans le dossier de sortie de l’étape usine avec `rapport.json`. À la livraison,
-  rattacher ces preuves au SHA créé par l’orchestrateur et rejouer la CI sur ce SHA.
-- Session locale reprise et revalidée : 2026-09-30, macOS 26.6.2 (25G83), Darwin arm64, Node 26.8.1, pnpm 9.15.9,
-  Rust/Cargo 1.96.1. La CI choisit Node 22 et reste à exécuter.
+  conservés dans le dossier de sortie de l’étape usine avec `rapport.json`. Le SHA
+  `579ed8088eb5264fd0a9fa6916375ac7c80d95aa` est validé sur les trois OS (N1). Toute
+  nouvelle révision de code doit disposer de ses propres résultats CI.
+- Session locale reprise et revalidée : 2026-10-01, macOS 26.6.2 (25G83), Darwin arm64, Node 26.8.1, pnpm 9.15.9,
+  Rust/Cargo 1.96.1. La CI choisit Node 22 ; le run vert du candidat est consigné en N1.
 - Aucun vrai agent lancé, aucun trousseau personnel ni donnée de production consulté.
   Les providers réseau et identifiants sont simulés ; les tests utilisent des homes injectés.
 - Résultats du 2026-07-29 : historiques seulement, rapportés par la branche source sans
@@ -24,17 +25,17 @@ choisi n’ont pas une preuve applicable au candidat.
 
 Les sorties finales, compteurs et restrictions sont consignés après exécution dans ce tableau.
 `PASS local` ne signifie jamais PASS Windows, Linux, lecteur d’écran ou agent réel.
-Après correction des branches d’écriture ACL Windows, A1–A4 ont été rejoués sur `caacd5a`
-avec le diff de correction : résultats ci-dessous, journaux dans la sortie
-`recovery-1/ci-3-review-1-correction`. A5 reste la vérification précédente, non réexécutée
-pendant cette correction ; aucun workflow n’a changé.
+Après correction documentaire de N1, A1–A4 ont été rejoués sur `579ed808…` avec le diff
+documentaire : résultats ci-dessous, journaux dans la sortie
+`reprise-3/review-1-correction`. A5 reste la vérification précédente, non réexécutée
+pendant cette correction ; aucun code, test ou workflow n’a changé.
 
 | ID | Commande / inspection | Résultat courant et portée |
 | --- | --- | --- |
-| A1 | `pnpm format:check && pnpm build && cargo test --manifest-path src-tauri/Cargo.toml --locked && node --test --experimental-strip-types tests/*.test.ts` | **Format et build PASS ; Cargo 89 unitaires PASS / 4 échecs socket sandbox, code 101.** La chaîne s’arrête avant Node. Exécution complète `--no-fail-fast` : **144 PASS / 4 mêmes échecs**, aucun test ignoré. Node lancé séparément : **56/56 PASS**. Voir `factory-validation.log`, `rust-all.log`, `node-factory.log`. |
+| A1 | `pnpm format:check && pnpm build && cargo test --manifest-path src-tauri/Cargo.toml --locked && node --test --experimental-strip-types tests/*.test.ts` | **Format et build PASS ; Cargo 89 unitaires PASS / 4 échecs socket sandbox, code 101.** La chaîne s’arrête avant Node. Exécution complète `--no-fail-fast` : **146 PASS / 4 mêmes échecs**, aucun test ignoré. Node lancé séparément : **57/57 PASS**. Voir `factory-validation.log`, `rust-all.log`, `node-factory.log`. |
 | A2 | `pnpm test:frontend` | **72/72 PASS, 18 fichiers**, DOM jsdom/IPC simulé seulement ; `frontend.log`. |
 | A3 | `cargo check --manifest-path src-tauri/Cargo.toml --locked` | **PASS**, `cargo-check.log`, compilation macOS arm64 uniquement. |
-| A4 | `bash scripts/check-release-notarization.sh` | **PASS**, présence des commandes, pas notarisation réelle ; sortie « Release workflow contains macOS notarization hooks. ». |
+| A4 | `bash scripts/check-release-notarization.sh` | **PASS**, présence des commandes, pas notarisation réelle ; `notarization.log`, sortie « Release workflow contains macOS notarization hooks. ». |
 | A5 | Erreurs synthétiques, recherche Sentry, inspection de `dist/` | **PASS local limité** : tests synthétiques frontend/Rust verts ; 6 fichiers `dist/`, 0 sourcemap, 0 détection de valeur token/clé privée/URL signée/chemin personnel/fixture. Aucune intégration Sentry trouvée dans sources et dépendances. `privacy-inspection.json` ; aucune inspection de service externe. |
 
 Les quatre échecs sont ceux de `commands::slash_commands::tests` :
@@ -98,10 +99,36 @@ Rust ; pas de profil personnel. Aucun serveur de développement ni packaging com
 
 ## N1 — CI du candidat
 
-Après livraison du code par l’orchestrateur, conserver pour chaque OS : SHA testé, URL du run,
+**État courant : PASS** pour `579ed8088eb5264fd0a9fa6916375ac7c80d95aa`.
+La preuve transmise par la revue de l’usine est le
+[run `36735884312`](https://github.com/Tontoon7/skillreg-local/actions/runs/36735884312),
+`conclusion=success`, avec les trois jobs `macos-14`, `ubuntu-22.04` et `windows-2022`
+en `success`. Le journal fourni `skillreg-windows-final-green.log` rapporte **Node 61/61**,
+dont « Windows metadata applies and clones protected DACLs without parent inheritance ».
+Cette correction documentaire du 2026-10-01 rattache cette preuve au SHA testé ; aucun accès
+GitHub ni nouveau lancement distant n’a été effectué par l’agent.
+
+Le contrat actuel construit deux entrées distinctes `D:P` et `D:PAI` en remplaçant le bloc
+complet de flags, sans produire `PAIAI`. Après écriture via `SetSecurityInfo`, les deux
+attendent `D:PAI` : seule la normalisation administrative `P` vers `PAI` est admise.
+Propriétaire, groupe, ACE et protection sont comparés exactement après application,
+réouverture et clonage ; aucune ACE héritée du parent n’est admise. Le snapshot et le verify
+finaux restent obligatoires. Le test et les branches d’écriture exclusives sont déjà présents
+dans ce SHA ; aucun changement du helper ou des assertions n’est nécessaire ici.
+
+**N1 est fermée ; N2–N7 restent ouvertes et la release reste NO-GO.** Le runner Windows
+ne prouve pas N5 en compte standard, ni la découverte des skills par les vrais agents.
+
+Pour toute nouvelle révision de code livrée par l’orchestrateur, conserver pour chaque OS : SHA testé, URL du run,
 date, architecture, versions Node/Rust, résultat format/build/Node/Vitest/Cargo. La matrice de
 `.github/workflows/ci.yml` doit être entièrement verte. `--no-fail-fast` expose tous les binaires
 Rust ; un échec reste un échec, aucune règle ni test n’est désactivé.
+
+### Historique des échecs et corrections avant le run vert
+
+Les états « N1 ouverte », hypothèses et validations à confirmer ci-dessous décrivent les
+runs antérieurs. Ils sont conservés pour leur provenance et remplacés, pour le candidat
+`579ed808…`, par le résultat courant ci-dessus ; ils ne constituent plus des gates CI ouvertes.
 
 Premier échec : **Windows au formatage** dans le run `36402842337`, job `108864527362`
 (journal fourni par l’usine). L’export local avec `core.autocrlf=true` reproduit les 91 erreurs
@@ -370,11 +397,13 @@ Le test portable capture et décode le vrai `-EncodedCommand` transmis au proces
 Il échoue avant correction sur l’absence de branches exclusives (`acl-branches-red.log`),
 puis passe avec les **15/15 tests locaux** de sauvegarde/restauration (`acl-branches-green.log`).
 Il vérifie les appels possibles, sans exécuter C# ou prouver les ACL NTFS. Les assertions
-natives d’égalité exacte après réouverture, y compris celles de `P` et `PAI`, sont inchangées.
-La conservation de `AI` sur une DACL protégée `PAI` par `SetSecurityInfo` seul n’est pas démontrée
-et ce test peut encore échouer sur Windows. Aucun appel kernel de repli n’est autorisé pour
-forcer ce cas : les comparaisons complètes du snapshot/refus d’un inventaire divergent restent
-bloquantes. N1/N5 et la release restent **NO-GO** jusqu’à la preuve Windows applicable au candidat.
+natives après réouverture sont maintenues. La fixture a ensuite été corrigée pour distinguer
+les entrées `P` et `PAI` sans duplication de `AI`, puis alignée sur la normalisation
+`SetSecurityInfo` vers `D:PAI`, avec égalité exacte propriétaire/groupe/ACE/protection.
+Le test passe sur Windows dans le run `36735884312` pour `579ed808…` (résultat courant N1).
+Aucun appel kernel de repli n’est ajouté pour une DACL protégée ; les comparaisons complètes
+du snapshot et le refus d’un inventaire divergent restent bloquants. N5 en compte standard
+et la release restent ouverts/NO-GO.
 
 ## N2 — Campagne native isolée et découverte des agents
 
@@ -463,8 +492,9 @@ interprétation selon le parent. Le clonage restaure aussi propriétaire et grou
 sont présents dans le descripteur ; les droits nécessaires doivent être disponibles, sinon
 la copie est refusée. Les DACL protégées sont appliquées via `SetSecurityInfo` par handle ;
 les autres sont copiées brutes sans recalcul d’héritage. Le nom UTF-16 du renommage est terminé
-explicitement, sans inclure le terminateur dans sa longueur. La conservation exacte doit encore
-être confirmée en CI Windows.
+explicitement, sans inclure le terminateur dans sa longueur. La CI Windows du candidat
+est verte (N1) : les comparaisons restent exactes pour propriétaire, groupe, ACE et protection,
+avec la seule normalisation administrative `P` vers `PAI` par `SetSecurityInfo`.
 Aucune réapplication des permissions ne suit le déplacement : une
 interruption peut reprendre à partir des inventaires exacts. Les junctions sont ouvertes sans
 suivre leur cible ; une destination apparue entre le contrôle et le renommage provoque un refus.
@@ -520,8 +550,9 @@ remplacement atomique ; tester héritage trop large et refus de durcissement, an
 Une seconde session OS ne doit lire ni modifier ces fichiers. Ne changer aucun compte ni ACL
 système pour faire passer ces tests : seules les fixtures reçoivent des ACL locales.
 
-État : **non exécuté ici** ; les tests réservés Windows ne tournent pas sur macOS. Un run vert
-administrateur ne coche pas cette gate.
+État : **campagne en compte standard non exécutée** ; les tests réservés Windows ne tournent
+pas sur macOS. La CI Windows du candidat est verte (N1), y compris le test des DACL protégées
+avec entrées `P`/`PAI` et attendu `D:PAI`. Un run vert administrateur ne coche pas cette gate.
 La suite actuelle couvre héritage trop large, remplacement privé, refus d’une junction étrangère
 et création de junction interdite. Le refus effectif de `Set-Acl` pendant le durcissement, avec
 ancien manifeste/config intacts, reste à reproduire dans ce profil standard ; le refus d’une

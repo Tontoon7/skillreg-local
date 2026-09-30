@@ -1,6 +1,7 @@
 # Checklist de release — expérience de skills gérées
 
-**État du candidat :** 2026-09-30
+**État du candidat :** 2026-10-01
+**SHA validé en CI :** `579ed8088eb5264fd0a9fa6916375ac7c80d95aa`
 **Périmètre :** lot A de l’expérience collaborateur métier
 **Version desktop de travail :** 0.3.25
 **Statut actuel : NO-GO dogfood macOS et NO-GO activation générale.**
@@ -63,7 +64,7 @@ scénario 18 n’a pas un playbook de downgrade vérifié.
 | Cargo check verrouillé | A3 | Voir registre |
 | Garde notarisation | A4 | Voir registre |
 | Confidentialité des erreurs et bundle local | A5 | Voir registre |
-| CI Linux/macOS/Windows sur le SHA candidat | N1 | Échec Windows `36673438738`, champ ACL au clonage ; branches protégée/non protégée corrigées après revue, conservation de `AI`/`P`/`PAI` à confirmer sur NTFS |
+| CI Linux/macOS/Windows sur le SHA candidat | N1 | **PASS** sur `579ed8088eb5264fd0a9fa6916375ac7c80d95aa`, run `36735884312` : `macos-14`, `ubuntu-22.04`, `windows-2022` success ; Node Windows 61/61, dont le test DACL protégées |
 | App tests/types/format/build et bundle CLI | N6 | Preuves externes manquantes |
 | Website lint/build, compatibilité téléchargement | N6 | Preuves externes manquantes |
 | Packaging, signatures, notarisation, updater réel | N7 | Non exécutés pendant cette étape |
@@ -120,8 +121,8 @@ Claude Code, Codex ou Cursor. Une ligne ne peut passer à `Validée` qu’avec l
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | macOS | arm64 | Historique, à rejouer | Historique, à rejouer | Historique, à rejouer | A1 | A1 | A1 | A1, runtime à rejouer | NO-GO |
 | macOS | x64 | À tester | À tester | À tester | CI à exécuter | CI à exécuter | CI à exécuter | CI à exécuter | Bloqué |
-| Windows | x64 | À tester | À tester | À tester | CI à exécuter | CI à exécuter | CI à exécuter | CI à exécuter | Bloqué |
-| Linux | x64 | À tester | À tester | À tester | CI à exécuter | CI à exécuter | CI à exécuter | CI à exécuter | Bloqué |
+| Windows | x64 | À tester | À tester | À tester | N1 | N1 | N1 | N1, runtime à tester | Bloqué |
+| Linux | x64 | À tester | À tester | À tester | N1 | N1 | N1 | N1, runtime à tester | Bloqué |
 
 Les adaptateurs macOS x64, Linux et Windows restent désactivés tant que leur ligne runtime n’est pas
 documentée dans `docs/agent-compatibility.md`. Il n’existe aucun fallback silencieux vers une
@@ -254,7 +255,7 @@ La validation locale A1 conserve quatre échecs de socket dus au sandbox, à rej
 moteur ; aucune condition native ou distante n’est cochée à partir de cette limitation.
 
 1. [ ] Toutes les gates automatisées locales passent.
-2. [ ] Les jobs CI Linux, macOS et Windows passent sur le commit candidat.
+2. [x] Les jobs CI Linux, macOS et Windows passent sur le commit candidat (N1, `579ed808…`, run `36735884312`).
 3. [ ] Dogfood macOS arm64 sur profils sauvegardés.
 4. [ ] Parcours E2E 1 à 21 exécutés et preuves consignées.
 5. [ ] Runtime Claude, Codex et Cursor validé sur chaque OS activé.
@@ -274,7 +275,7 @@ upload de télémétrie de contenu ou d’usage n’est activé dans le lot A.
 ### Conditions GO dogfood macOS arm64 sur profils sauvegardés
 
 - [ ] Toutes les gates locales sont vertes.
-- [ ] CI trois OS sur le SHA candidat.
+- [x] CI trois OS sur le SHA candidat (N1, `579ed808…`, run `36735884312`).
 - [ ] Le package Tauri est produit, signé et notarisé ; updater/intégrité vérifiés.
 - [ ] Accessibilité native N3 validée.
 - [ ] Les trois agents macOS découvrent la fixture via le binding géré.
@@ -296,6 +297,6 @@ upload de télémétrie de contenu ou d’usage n’est activé dans le lot A.
 ### Décision
 
 **NO-GO dogfood macOS et NO-GO activation générale ; aucun périmètre de distribution autorisé.**
-Les campagnes natives, CI distante, droits Windows standard, binaire legacy, release signée,
+La CI trois OS est validée (N1). Les campagnes natives, droits Windows standard, binaire legacy, release signée,
 compatibilité app/CLI/site et observations à 72 h/J+7 restent sans preuves applicables.
 La préparation du code et des protocoles ne coche pas les critères finaux du ticket.
