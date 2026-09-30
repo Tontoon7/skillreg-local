@@ -263,7 +263,11 @@ if (process.platform === "win32") {
 		assert.match(before, /D:P/);
 		assert.doesNotMatch(before, /\(A;[^;]*ID;/);
 		writeFileSync(destination, "copy");
-		for (const acl of [before, before.replace("D:P", "D:PAI")]) {
+		assert.match(before, /D:P(?:AI)?\(/);
+		// Replace the complete DACL flags: Get-Acl can already return PAI.
+		const variants = ["D:P", "D:PAI"].map((flags) => before.replace(/D:P(?:AI)?(?=\()/, flags));
+		assert.notEqual(variants[0], variants[1]);
+		for (const acl of variants) {
 			assert.deepEqual(winMetadata([{ path: source, acl }]), [acl]);
 			assert.deepEqual(winMetadata([{ path: source }]), [acl]);
 			assert.deepEqual(winMetadata([{ path: destination, acl }]), [acl]);
