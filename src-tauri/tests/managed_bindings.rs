@@ -686,6 +686,25 @@ fn a_canonicalized_home_creates_a_ready_native_link() {
     service.remove_owned(&skill, &binding).unwrap();
     assert!(fs::symlink_metadata(&binding.link_path).is_err());
     assert!(Path::new(&skill.content_path).join("SKILL.md").is_file());
+    let foreign = home.path.join("foreign");
+    fs::create_dir(&foreign).unwrap();
+    fs::write(foreign.join("keep.txt"), "foreign content preserved").unwrap();
+    create_test_link(&foreign, Path::new(&binding.link_path));
+    let conflict = service.reconcile(&skill, &[binding.clone()], &detections);
+    assert_eq!(conflict.results[0].status, BindingStatus::Conflict);
+    assert_eq!(
+        service.remove_owned(&skill, &binding).unwrap_err().code(),
+        ManagedErrorCode::BindingConflict
+    );
+    assert_eq!(
+        fs::canonicalize(&binding.link_path).unwrap(),
+        fs::canonicalize(&foreign).unwrap()
+    );
+    assert_eq!(
+        fs::read_to_string(foreign.join("keep.txt")).unwrap(),
+        "foreign content preserved"
+    );
+    assert!(Path::new(&skill.content_path).join("SKILL.md").is_file());
 }
 
 #[test]
