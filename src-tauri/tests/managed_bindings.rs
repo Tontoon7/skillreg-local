@@ -644,6 +644,45 @@ fn missing_owned_link_is_recreated() {
 }
 
 #[test]
+fn a_native_link_keeps_its_kind_when_its_target_is_missing() {
+    let home = TestHome::new("missing-target-inspection");
+    let paths = ManagedPaths::new(home.path.clone()).unwrap();
+    let skill = sample_skill(&paths);
+    let service = service(&home);
+    let detections = [detection(AgentId::Claude, home.path.join(".claude/skills"))];
+    let first = service.apply(service.plan(&skill, &detections).unwrap());
+    let binding = first_binding(&first);
+    fs::remove_dir_all(&skill.content_path).unwrap();
+    assert!(fs::symlink_metadata(&binding.link_path).is_ok());
+    assert!(!Path::new(&binding.link_path).exists());
+    let inspection = SystemPlatformLinker::current()
+        .inspect(Path::new(&binding.link_path))
+        .unwrap();
+    assert!(
+        matches!(inspection, LinkInspection::Link { kind, target_exists: false, .. }
+        if kind == SystemPlatformLinker::current().link_kind()),
+        "{inspection:?}"
+    );
+}
+
+#[test]
+fn a_canonicalized_home_creates_a_ready_native_link() {
+    let mut home = TestHome::new("canonical-home");
+    home.path = fs::canonicalize(&home.path).unwrap();
+    let paths = ManagedPaths::new(home.path.clone()).unwrap();
+    let skill = sample_skill(&paths);
+    let service = service(&home);
+    let detections = [detection(AgentId::Claude, home.path.join(".claude/skills"))];
+    let created = service.apply(service.plan(&skill, &detections).unwrap());
+    assert_eq!(created.results[0].status, BindingStatus::Ready);
+    let binding = first_binding(&created);
+    assert_eq!(
+        fs::canonicalize(&binding.link_path).unwrap(),
+        fs::canonicalize(&skill.content_path).unwrap()
+    );
+}
+
+#[test]
 fn broken_owned_link_recovers_after_canonical_content_is_restored() {
     let home = TestHome::new("broken-target");
     let paths = ManagedPaths::new(home.path.clone()).unwrap();

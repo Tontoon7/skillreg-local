@@ -195,7 +195,20 @@ async fn real_migration_and_update_restore_the_complete_legacy_profile_using_the
         paths.clone(),
     );
     let migrated = migration.run(true).await.unwrap();
-    assert_eq!(migrated.migrated, 1);
+    assert_eq!(
+        migrated.migrated,
+        1,
+        "errors={} conflicts={} skipped={} classes={:?}",
+        migrated.errors,
+        migrated.conflicts,
+        migrated.skipped,
+        migrated
+            .preview
+            .items
+            .iter()
+            .map(|item| item.classification)
+            .collect::<Vec<_>>()
+    );
     assert_eq!(migrated.errors, 0);
     assert!(matches!(
         SystemPlatformLinker::current().inspect(&claude).unwrap(),
