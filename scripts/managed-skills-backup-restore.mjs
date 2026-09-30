@@ -311,7 +311,7 @@ function inventory(base) {
 		}
 		if (info.isSymbolicLink()) {
 			entry.type = "link";
-			entry.target = readlinkSync(absolute);
+			entry.target = during("Inventory link target", () => readlinkSync(absolute));
 			if (windows) {
 				const kind = native(
 					"powershell.exe",
@@ -430,9 +430,9 @@ function writeDurable(path, value, exclusive = true) {
 function snapshot(home, backup) {
 	directory(home);
 	requireState(!stat(backup), "Backup destination must be new");
-	const entries = inventory(home);
+	const entries = during("Snapshot inventory", () => inventory(home));
 	privateDirectory(backup);
-	clone(home, join(backup, "data"), entries);
+	during("Snapshot copy", () => clone(home, join(backup, "data"), entries));
 	requireState(
 		equal(inventory(home), entries),
 		"Profile changed during backup; snapshot is incomplete",
@@ -599,8 +599,8 @@ export function execute(args, hooks = {}) {
 		);
 		options[key] = key === "--apply" ? true : rest[++i];
 	}
-	const home = canonical(options["--home"]);
-	const backup = canonical(options["--backup"]);
+	const home = during("Profile path", () => canonical(options["--home"]));
+	const backup = during("Backup path", () => canonical(options["--backup"]));
 	directory(home);
 	separate(home, backup);
 	requireState(

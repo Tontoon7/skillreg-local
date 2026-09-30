@@ -1123,11 +1123,11 @@ struct ToggleInspectLinker {
 
 impl PlatformLinker for ToggleInspectLinker {
     fn platform(&self) -> Platform {
-        Platform::Macos
+        SystemPlatformLinker::current().platform()
     }
 
     fn link_kind(&self) -> LinkKind {
-        LinkKind::Symlink
+        SystemPlatformLinker::current().link_kind()
     }
 
     fn validate_paths(&self, target: &Path, link: &Path) -> Result<(), ManagedErrorCode> {

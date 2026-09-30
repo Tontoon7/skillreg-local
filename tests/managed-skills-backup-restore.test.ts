@@ -15,7 +15,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import { join, parse, resolve } from "node:path";
+import { join, parse, resolve, toNamespacedPath } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -373,6 +373,31 @@ test("complete snapshot restores files, permissions and external links, preservi
 		assert.equal(lstatSync(join(paths.home, ".skillreg/config.json")).mode & 0o777, 0o600);
 	}
 	success(run("restore", paths, ["--apply", "--recovery", paths.recovery]));
+});
+
+test("namespaced native paths preserve the complete snapshot and restore", (t) => {
+	const paths = fixture();
+	t.after(() => rmSync(paths.root, { recursive: true, force: true }));
+	const nativePaths = {
+		...paths,
+		home: toNamespacedPath(paths.home),
+		backup: toNamespacedPath(paths.backup),
+		recovery: toNamespacedPath(paths.recovery),
+	};
+	success(run("snapshot", nativePaths));
+	success(run("verify", nativePaths));
+	writeFileSync(join(paths.home, ".skillreg/config.json"), '{"token":"later-fixture-access"}');
+	success(run("restore", nativePaths, ["--apply", "--recovery", nativePaths.recovery]));
+	assert.equal(
+		readFileSync(join(paths.home, ".skillreg/config.json"), "utf8"),
+		'{"token":"fixture-access"}',
+	);
+	assert.equal(readFileSync(join(paths.external, "SKILL.md"), "utf8"), "external untouched");
+	assert.equal(
+		realpathSync(join(paths.home, ".agents/skills/external")),
+		realpathSync(paths.external),
+	);
+	success(run("verify", nativePaths));
 });
 
 test("arguments, overlapping paths and aliases are rejected before profile mutation", (t) => {

@@ -635,6 +635,7 @@ fn missing_owned_link_is_recreated() {
     let first = service.apply(service.plan(&skill, &detections).unwrap());
     let binding = first_binding(&first);
     remove_test_link(Path::new(&binding.link_path));
+    assert!(fs::symlink_metadata(&binding.link_path).is_err());
 
     let repaired = service.reconcile(&skill, &[binding], &detections);
 
@@ -689,6 +690,7 @@ fn remove_test_link(link: &Path) {
 #[cfg(windows)]
 fn remove_test_link(link: &Path) {
     junction::delete(link).unwrap();
+    fs::remove_dir(link).unwrap();
 }
 
 #[cfg(target_os = "windows")]
