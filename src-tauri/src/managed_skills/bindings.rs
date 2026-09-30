@@ -205,7 +205,7 @@ impl<A: AgentRegistry, L: PlatformLinker> ManagedBindingService<A, L> {
                 kind,
                 target: actual_target,
                 ..
-            } if kind == binding.link_kind && actual_target == target => Ok(()),
+            } if kind == binding.link_kind && same_target_path(&actual_target, &target) => Ok(()),
             LinkInspection::Link { .. } | LinkInspection::Other => {
                 Err(ManagedError::new(ManagedErrorCode::BindingConflict))
             }
@@ -321,7 +321,7 @@ impl<A: AgentRegistry, L: PlatformLinker> ManagedBindingService<A, L> {
                         && Path::new(&binding.link_path) == operation.link_path
                         && binding.link_kind == operation.link_kind
                         && kind == operation.link_kind
-                        && target == operation.target_path
+                        && same_target_path(&target, &operation.target_path)
                 });
                 if !is_owned {
                     return Err(ManagedError::new(ManagedErrorCode::BindingConflict));
@@ -416,6 +416,14 @@ fn temporary_link_path(destination: &Path) -> PathBuf {
     destination.with_file_name(format!("{name}.{}.skillreg-tmp", Uuid::new_v4()))
 }
 
+fn same_target_path(actual: &Path, expected: &Path) -> bool {
+    actual == expected
+        || fs::canonicalize(actual)
+            .ok()
+            .zip(fs::canonicalize(expected).ok())
+            .is_some_and(|(actual, expected)| actual == expected)
+}
+
 fn link_matches(inspection: &LinkInspection, operation: &BindingOperation) -> bool {
     matches!(
         inspection,
@@ -423,7 +431,7 @@ fn link_matches(inspection: &LinkInspection, operation: &BindingOperation) -> bo
             kind,
             target,
             target_exists: true,
-        } if *kind == operation.link_kind && *target == operation.target_path
+        } if *kind == operation.link_kind && same_target_path(target, &operation.target_path)
     )
 }
 

@@ -676,10 +676,16 @@ fn a_canonicalized_home_creates_a_ready_native_link() {
     let created = service.apply(service.plan(&skill, &detections).unwrap());
     assert_eq!(created.results[0].status, BindingStatus::Ready);
     let binding = first_binding(&created);
+    let reconciled = service.reconcile(&skill, &[binding.clone()], &detections);
+    assert_eq!(reconciled.results[0].status, BindingStatus::Ready);
+    assert!(!reconciled.results[0].created);
     assert_eq!(
         fs::canonicalize(&binding.link_path).unwrap(),
         fs::canonicalize(&skill.content_path).unwrap()
     );
+    service.remove_owned(&skill, &binding).unwrap();
+    assert!(fs::symlink_metadata(&binding.link_path).is_err());
+    assert!(Path::new(&skill.content_path).join("SKILL.md").is_file());
 }
 
 #[test]

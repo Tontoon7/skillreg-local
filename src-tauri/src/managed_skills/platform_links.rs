@@ -144,16 +144,22 @@ fn inspect_link(link: &Path) -> Result<LinkInspection, ManagedErrorCode> {
         Err(_) => return Err(ManagedErrorCode::BindingVerifyFailed),
     };
     #[cfg(target_os = "windows")]
-    if metadata_is_link_like(&metadata)
-        && junction::exists(link).map_err(|_| ManagedErrorCode::BindingVerifyFailed)?
-    {
-        let target =
-            junction::get_target(link).map_err(|_| ManagedErrorCode::BindingVerifyFailed)?;
-        return Ok(LinkInspection::Link {
-            target_exists: target.exists(),
-            kind: LinkKind::Junction,
-            target,
-        });
+    if metadata_is_link_like(&metadata) {
+        // Read the reparse point itself: exists() follows its possibly missing target.
+        match junction::get_target(link) {
+            Ok(target) => {
+                return Ok(LinkInspection::Link {
+                    target_exists: target.exists(),
+                    kind: LinkKind::Junction,
+                    target,
+                });
+            }
+            Err(error) if error.raw_os_error().is_some() => {
+                return Err(ManagedErrorCode::BindingVerifyFailed);
+            }
+            // junction 2.0 uses a non-OS error for a different reparse tag.
+            Err(_) => {}
+        }
     }
 
     if !metadata.file_type().is_symlink() {
