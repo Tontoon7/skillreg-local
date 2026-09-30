@@ -23,13 +23,12 @@ LAYOUTS = {
     "linux": {
         "deb": ("deb", ".deb"), "rpm": ("rpm", ".rpm"),
         "appimage": ("appimage", ".AppImage"),
-        "updater": ("appimage", ".AppImage.tar.gz"),
     },
     "windows": {
         "nsis": ("nsis", ".exe"), "msi": ("msi", ".msi"),
-        "updater": ("nsis", ".nsis.zip"),
     },
 }
+UPDATERS = {"darwin": "updater", "linux": "appimage", "windows": "nsis"}
 DELIVERY_SUFFIXES = tuple(suffix for layout in LAYOUTS.values() for _, suffix in layout.values())
 VERSION_PATTERN = r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?"
 
@@ -83,7 +82,8 @@ def select_files(directory, platform, final, allow_inventory=False):
         candidates = [path for name, path in files.items() if name.endswith(suffix)]
         require(len(candidates) == 1, f"Expected exactly one {platform} {role}, found {len(candidates)}")
         selected[role] = candidates[0]
-    required = {"updater-signature": selected["updater"].name + ".sig"}
+    updater = selected[UPDATERS[platform.split("-", 1)[0]]]
+    required = {"updater-signature": updater.name + ".sig"}
     optional = {}
     if platform == "linux-x86_64":
         optional = {f"{role}-openpgp": path.name + ".asc" for role, path in selected.items()}
@@ -114,8 +114,8 @@ def collect(bundle, platform, output):
         parent = bundle / subdirectory
         require(not parent.is_symlink() and parent.is_dir(), f"Missing bundle directory: {parent}")
         for path in sorted(parent.iterdir()):
-            # Tauri also produces intermediates and MSI updater archives, not distributed here.
-            if path.name.endswith((".msi.zip", ".msi.zip.sig")):
+            # MSI is distributed as an Authenticode-signed installer, not a Tauri updater.
+            if subdirectory == "msi" and path.name.endswith((".msi.sig", ".msi.zip", ".msi.zip.sig")):
                 continue
             if not path.name.endswith(DELIVERY_SUFFIXES + (".sig", ".asc")):
                 continue
@@ -123,8 +123,10 @@ def collect(bundle, platform, output):
             require(not path.is_symlink() and path.is_file(), f"Not a regular asset: {path}")
             require(path.stat().st_size > 0, f"Empty asset: {path}")
             allowed = tuple(suffix for directory, suffix in layout.values() if directory == subdirectory)
-            allowed += tuple(suffix + ".sig" for directory, suffix in layout.values()
-                             if directory == subdirectory and suffix == layout["updater"][1])
+            updater_role = UPDATERS[platform.split("-", 1)[0]]
+            updater_directory, updater_suffix = layout[updater_role]
+            if subdirectory == updater_directory:
+                allowed += (updater_suffix + ".sig",)
             require(path.name.endswith(allowed), f"Unexpected asset in {subdirectory}: {path.name}")
             candidates.append(path)
     names = [path.name.casefold() for path in candidates]
@@ -133,10 +135,12 @@ def collect(bundle, platform, output):
     for role, (subdirectory, suffix) in layout.items():
         matching = [path for path in candidates if path.parent.name == subdirectory and path.name.endswith(suffix)]
         require(len(matching) == 1, f"Expected exactly one {platform} {role}, found {len(matching)}")
-        if role == "updater":
-            signature = matching[0].with_name(matching[0].name + ".sig")
-            require(signature in candidates, f"Missing updater signature: {signature.name}")
-            signature_text(signature)
+    updater_role = UPDATERS[platform.split("-", 1)[0]]
+    updater = next(path for path in candidates if path.parent.name == layout[updater_role][0]
+                   and path.name.endswith(layout[updater_role][1]))
+    signature = updater.with_name(updater.name + ".sig")
+    require(signature in candidates, f"Missing updater signature: {signature.name}")
+    signature_text(signature)
     require(len(candidates) == len(layout) + 1, "Unexpected or orphan bundle signatures")
     output.mkdir(parents=True)
     for path in candidates:
@@ -145,7 +149,7 @@ def collect(bundle, platform, output):
 
 def linux_files(directory):
     files = select_files(directory, "linux-x86_64", final=False, allow_inventory=True)
-    return [files[role].resolve() for role in LAYOUTS["linux"]]
+    return [files[role].resolve() for role in ("deb", "rpm", "appimage")]
 
 
 def validate_version(commit, version):
@@ -247,13 +251,14 @@ def prepare(source, output, commit, tag, repository, windows_subject, linux_fing
             if role == "updater-signature":
                 continue
             name = path.name
-            if role == "updater" and platform.startswith("darwin"):
+            updater_role = UPDATERS[platform.split("-", 1)[0]]
+            if role == updater_role and platform.startswith("darwin"):
                 arch = "aarch64" if platform == "darwin-aarch64" else "x64"
                 name = f"SkillReg_{arch}.app.tar.gz"
             require(name.casefold() not in names, f"Release asset name collision: {name}")
             names.add(name.casefold())
             copies[name] = (path, verified[role])
-            if role == "updater":
+            if role == updater_role:
                 updater[platform] = {"signature": signature_text(selected["updater-signature"]),
                                      "url": f"https://github.com/{repository}/releases/download/{tag}/{name}"}
     require(set(updater) == set(PLATFORMS), "Incomplete updater manifest")

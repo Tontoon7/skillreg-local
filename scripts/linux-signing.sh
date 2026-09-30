@@ -5,11 +5,11 @@ umask 077
 
 fail() { echo "$*" >&2; exit 1; }
 mode=${1:-}
-[[ "$mode" == sign || "$mode" == verify ]] || fail 'Usage: linux-signing.sh sign|verify -- file.deb file.rpm file.AppImage file.AppImage.tar.gz'
+[[ "$mode" == sign || "$mode" == verify ]] || fail 'Usage: linux-signing.sh sign|verify -- file.deb file.rpm file.AppImage'
 shift
 [[ "${1:-}" == -- ]] || fail 'An explicit file list after -- is required.'
 shift
-[[ $# == 4 ]] || fail 'Expected one file per Linux format (.deb, .rpm, .AppImage, .AppImage.tar.gz).'
+[[ $# == 3 ]] || fail 'Expected one file per Linux format (.deb, .rpm, .AppImage).'
 for variable in LINUX_SIGNING_PUBLIC_KEY LINUX_SIGNING_KEY_FINGERPRINT; do
   [[ -n "${!variable:-}" ]] || fail "Missing $variable"
 done
@@ -36,7 +36,6 @@ for file in "$@"; do
   output_dir=$directory
   file="$directory/$(basename "$file")"
   case "$file" in
-    *.AppImage.tar.gz) format=archive ;;
     *.AppImage) format=appimage ;;
     *.deb) format=deb ;;
     *.rpm) format=rpm ;;
@@ -169,4 +168,4 @@ if [[ "$mode" == sign ]]; then
   created+=("$public_asset")
   cp "$work/skillreg-linux-signing-key.asc" "$public_asset"
 fi
-echo "Verified Linux OpenPGP signatures for all four formats with primary key $fingerprint."
+echo "Verified Linux OpenPGP signatures for all three formats with primary key $fingerprint."

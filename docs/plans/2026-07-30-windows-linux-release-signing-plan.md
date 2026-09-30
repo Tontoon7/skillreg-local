@@ -7,18 +7,20 @@ manuelle. Cette procédure n'autorise pas à déclencher une release pendant l'u
 ## Trois protections complémentaires
 
 - Windows : Authenticode via Azure Artifact Signing, avec horodatage RFC 3161.
-  Le hook Tauri signe le binaire applicatif puis les installateurs avant la création
-  des archives updater. SignTool et PowerShell vérifient les signatures.
-- Linux : signatures OpenPGP détachées ASCII `.asc` sur les fichiers finaux `.deb`,
-  `.rpm`, `.AppImage` et `.AppImage.tar.gz`. La vérification utilise une clé publique
+  Le hook Tauri signe le binaire applicatif puis les installateurs pendant le bundling.
+  Le NSIS `.exe` et sa `.exe.sig` native alimentent `latest.json`.
+  SignTool et PowerShell vérifient les signatures.
+- Linux : signatures OpenPGP détachées ASCII `.asc` sur les téléchargements `.deb`,
+  `.rpm` et `.AppImage`. La vérification utilise une clé publique
   et une empreinte primaire configurées indépendamment des fichiers téléchargés.
 - Updater : les `.sig` Tauri restent produits avec la clé existante et intégrés à
   `latest.json`. Ils ne remplacent ni Authenticode ni OpenPGP. Leur validation
   cryptographique reste celle du plugin updater Tauri.
 
-Le contrat `createUpdaterArtifacts: "v1Compatible"`, les noms des plateformes,
+Le contrat `createUpdaterArtifacts: true` (format natif Tauri), les noms des plateformes,
 la clé publique et l'endpoint Tauri ne changent pas. NSIS reste le canal updater
-Windows ; les archives `.msi.zip` ne sont pas distribuées. macOS conserve sa
+Windows. Le MSI autonome reste signé Authenticode ; son `.msi.sig` Tauri est
+explicitement ignoré car il n'alimente pas `latest.json`. macOS conserve sa
 signature Developer ID, la notarisation et l'agrafage des DMG.
 
 ## Configuration préalable par Axel
@@ -113,17 +115,20 @@ commandes de précompilation, de préchargement et de packaging.
    et un certificat d'horodatage. Un avertissement SignTool est bloquant.
 5. Sélectionner exactement les familles attendues dans le répertoire `bundle`
    du target construit, sans rechercher des exécutables dans tout `target/`.
-   Les signatures Tauri doivent exister, être non vides et accompagner l'archive.
+   Le `.exe.sig` Tauri doit exister, être non vide et accompagner le `.exe` NSIS.
+   Le `.msi.sig` Tauri est ignoré explicitement : le MSI est un téléchargement direct
+   protégé par Authenticode, tandis que seul NSIS sert l'updater Windows.
 6. Sous Linux, charger les secrets uniquement dans l'étape de signature.
    Importer la clé privée dans un trousseau temporaire privé, contrôler son
-   empreinte, signer les quatre fichiers puis les vérifier dans un second
+   empreinte, signer `.deb`, `.rpm` et `.AppImage`, puis les vérifier dans un second
    trousseau public. Contrôler `VALIDSIG` et l'empreinte primaire, y compris pour
    une sous-clé, et refuser une primaire ou un signataire expiré/révoqué. Une ancienne
    sous-clé expirée inutilisée ne bloque pas une nouvelle sous-clé valide. Distribuer la clé publique
    exportée sous `skillreg-linux-signing-key.asc`. Les agents GPG et trousseaux
    sont nettoyés même après erreur ; le trousseau personnel n'est jamais utilisé.
-7. Sous Windows, revérifier le binaire applicatif, les installateurs EXE/MSI et
-   l'unique EXE de l'archive NSIS. Son SHA-256 doit égaler celui du NSIS autonome.
+7. Sous Windows, revérifier le binaire applicatif et les installateurs EXE/MSI.
+   L'EXE NSIS signé est directement le fichier updater ; sa `.exe.sig` Tauri reste
+   inchangée jusqu'à la validation de `latest.json`.
 8. Après les vérifications natives, `record` produit `verified-files.json` :
    plateforme, commit, version, identité attendue, tailles et SHA-256. L'upload
    échoue si aucun fichier n'existe. Cet inventaire relie les contrôles aux octets
@@ -141,8 +146,8 @@ commandes de précompilation, de préchargement et de packaging.
 | Plateforme | Inventaire transféré obligatoire |
 | --- | --- |
 | `darwin-aarch64`, `darwin-x86_64` | Chacune : DMG, `.app.tar.gz`, `.app.tar.gz.sig` |
-| `linux-x86_64` | `.deb`, `.rpm`, `.AppImage`, `.AppImage.tar.gz`, leurs quatre `.asc`, `.AppImage.tar.gz.sig`, clé publique |
-| `windows-x86_64` | NSIS `.exe`, MSI `.msi`, `.nsis.zip`, `.nsis.zip.sig` |
+| `linux-x86_64` | `.deb`, `.rpm`, `.AppImage`, leurs trois `.asc`, `.AppImage.sig`, clé publique |
+| `windows-x86_64` | NSIS `.exe` et `.exe.sig`, MSI `.msi` |
 
 Les inventaires et `.sig` ne sont pas des assets publics : les signatures Tauri
 sont lues dans `latest.json`. Les `.asc` Linux et la clé publique sont distribuées.
@@ -178,8 +183,7 @@ gpgconf --homedir "$verification_home" --kill gpg-agent
 rm -rf "$verification_home"
 ```
 
-Adapter le nom au téléchargement réel ; répéter pour `.deb`, `.rpm` ou l'archive
-`.AppImage.tar.gz`. Ces signatures détachées ne sont pas automatiquement vérifiées
+Adapter le nom au téléchargement réel ; répéter pour `.deb` et `.rpm`. Ces signatures détachées ne sont pas automatiquement vérifiées
 par apt, rpm ou l'updater SkillReg. La confiance dans la clé vient de la comparaison
 indépendante de l'empreinte, pas seulement du message « Good signature ».
 
@@ -207,10 +211,6 @@ de test et contrôler la signature du binaire installé ; vérifier les téléch
 Linux depuis un trousseau neuf ; tester la mise à jour depuis la version précédente
 sur les quatre plateformes ; confirmer la notarisation macOS. Aucun compte Azure,
 secret de release ou téléchargement de production n'est utilisé par les tests isolés.
-
-La branche parallèle `feat/activation-reset` propose `createUpdaterArtifacts: true`.
-Une fusion ultérieure doit réconcilier ses nouveaux formats avec cet inventaire ;
-ne pas résoudre le conflit en supprimant les contrôles ou une plateforme.
 
 ## Références
 

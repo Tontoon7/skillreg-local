@@ -63,7 +63,7 @@ export LINUX_SIGNING_PASSPHRASE="$passphrase"
 make_files() {
   mkdir "$test_root/$1"
   files=()
-  for suffix in deb rpm AppImage AppImage.tar.gz; do
+  for suffix in deb rpm AppImage; do
     files+=("$test_root/$1/SkillReg test.$suffix")
     printf 'isolated %s fixture\n' "$suffix" > "${files[${#files[@]}-1]}"
   done
@@ -87,9 +87,12 @@ expect_failure() {
 }
 
 make_files valid
+archive_fixture="$test_root/valid/SkillReg.AppImage.tar.gz"
+printf 'obsolete updater archive fixture\n' > "$archive_fixture"
 expect_failure 'Missing LINUX_SIGNING_PASSPHRASE' env LINUX_SIGNING_PASSPHRASE= bash "$signer" sign -- "${files[@]}"
 expect_failure 'Expected one file per Linux format' bash "$signer" sign -- "${files[0]}"
-expect_failure 'Expected one file per Linux format' bash "$signer" sign -- "${files[0]}" "${files[0]}" "${files[2]}" "${files[3]}"
+expect_failure 'Expected one file per Linux format' bash "$signer" sign -- "${files[0]}" "${files[0]}" "${files[2]}"
+expect_failure 'Unexpected Linux asset' bash "$signer" sign -- "${files[0]}" "${files[1]}" "$archive_fixture"
 expect_failure 'Unexpected OpenPGP primary fingerprint' env LINUX_SIGNING_KEY_FINGERPRINT="$other_fingerprint" bash "$signer" sign -- "${files[@]}"
 other_private=$(key_gpg "$test_root/keys-other" --passphrase-fd 3 \
   --armor --export-secret-keys "$other_fingerprint" 3<<<"$passphrase")

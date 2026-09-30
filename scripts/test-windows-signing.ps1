@@ -22,19 +22,6 @@ function Assert-Throws {
     Assert-True $caught "Expected failure: $Message"
 }
 
-function New-TestZip {
-    param([string]$Path, [hashtable]$Entries)
-    if (Test-Path -LiteralPath $Path) { Remove-Item -LiteralPath $Path }
-    $zip = [IO.Compression.ZipFile]::Open($Path, [IO.Compression.ZipArchiveMode]::Create)
-    try {
-        foreach ($name in $Entries.Keys) {
-            $entry = $zip.CreateEntry($name)
-            $writer = [IO.StreamWriter]::new($entry.Open())
-            try { $writer.Write($Entries[$name]) } finally { $writer.Dispose() }
-        }
-    } finally { $zip.Dispose() }
-}
-
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) "skillreg windows tests $([guid]::NewGuid())"
 $originalTool = $env:WINDOWS_SIGNTOOL_PATH
 $originalSubject = $env:WINDOWS_SIGNING_SUBJECT
@@ -121,22 +108,18 @@ $global:LASTEXITCODE = if ($args[0] -eq 'verify') { $global:WindowsTestVerifyExi
     $installer = Join-Path $assets $installerName
     [IO.File]::WriteAllText($installer, 'installer')
     [IO.File]::WriteAllText((Join-Path $assets 'SkillReg_1.0.0_x64_en-US.msi'), 'msi')
-    $archive = Join-Path $assets 'SkillReg_1.0.0_x64-setup.nsis.zip'
-    New-TestZip $archive @{ $installerName = 'installer' }
+    $updaterSignature = Join-Path $assets "$installerName.sig"
+    [IO.File]::WriteAllText($updaterSignature, 'tauri updater signature')
     Invoke-WindowsSigning -Mode verify-artifacts -ArtifactDirectory $assets -ApplicationPath $app
     Assert-Throws { Invoke-WindowsSigning -Mode verify-artifacts -ArtifactDirectory $assets } 'ApplicationPath'
-    foreach ($entries in @(@{}, @{ 'first.exe' = 'installer'; 'second.exe' = 'installer' }, @{ '../escape.exe' = 'installer' }, @{ 'wrong-name.exe' = 'installer' })) {
-        New-TestZip $archive $entries
-        Assert-Throws { Invoke-WindowsSigning -Mode verify-artifacts -ArtifactDirectory $assets -ApplicationPath $app } 'Archive must contain only'
-    }
-    New-TestZip $archive @{ $installerName = 'tampered' }
-    Assert-Throws { Invoke-WindowsSigning -Mode verify-artifacts -ArtifactDirectory $assets -ApplicationPath $app } 'differs from distributed installer'
-    New-TestZip $archive @{ $installerName = 'installer' }
+    [IO.File]::WriteAllText($updaterSignature, ' ')
+    Assert-Throws { Invoke-WindowsSigning -Mode verify-artifacts -ArtifactDirectory $assets -ApplicationPath $app } 'signature is empty or invalid'
+    [IO.File]::WriteAllText($updaterSignature, 'tauri updater signature')
     Copy-Item -LiteralPath $installer -Destination (Join-Path $assets 'duplicate.exe')
     Assert-Throws { Invoke-WindowsSigning -Mode verify-artifacts -ArtifactDirectory $assets -ApplicationPath $app } 'Exactly one .exe'
     Remove-Item -LiteralPath (Join-Path $assets 'duplicate.exe')
-    Remove-Item -LiteralPath $archive
-    Assert-Throws { Invoke-WindowsSigning -Mode verify-artifacts -ArtifactDirectory $assets -ApplicationPath $app } 'Exactly one .nsis.zip'
+    Remove-Item -LiteralPath $updaterSignature
+    Assert-Throws { Invoke-WindowsSigning -Mode verify-artifacts -ArtifactDirectory $assets -ApplicationPath $app } 'Exactly one .exe.sig'
     Write-Host 'Windows signing contract tests passed (local doubles).'
 
     Remove-Item Function:\Get-AuthenticodeSignature

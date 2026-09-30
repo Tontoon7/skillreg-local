@@ -63,7 +63,7 @@ function Assert-WindowsReleaseArtifacts {
     $app = Resolve-WindowsSigningFile $Application 'ApplicationPath'
     Assert-WindowsFileSignature $app
     $selected = @{}
-    foreach ($suffix in @('.exe', '.msi', '.nsis.zip')) {
+    foreach ($suffix in @('.exe', '.msi')) {
         $files = @(Get-ChildItem -LiteralPath $Directory -File -Force | Where-Object {
             $_.Name.EndsWith($suffix, [StringComparison]::OrdinalIgnoreCase)
         })
@@ -75,26 +75,15 @@ function Assert-WindowsReleaseArtifacts {
     Assert-WindowsFileSignature $installer.FullName
     Assert-WindowsFileSignature $selected['.msi'].FullName
 
-    $temporaryDirectory = Join-Path ([IO.Path]::GetTempPath()) "skillreg-nsis-verify-$([guid]::NewGuid())"
-    New-Item -ItemType Directory -Path $temporaryDirectory | Out-Null
-    try {
-        $archive = [IO.Compression.ZipFile]::OpenRead($selected['.nsis.zip'].FullName)
-        try {
-            if ($archive.Entries.Count -ne 1 -or $archive.Entries[0].FullName -cne $installer.Name) {
-                throw "Archive must contain only the expected installer: $($installer.Name)"
-            }
-            $entry = $archive.Entries[0]
-            if ($entry.Length -ne $installer.Length) { throw 'Updater archive differs from distributed installer.' }
-            # Extract to a fixed path rather than trusting archive paths.
-            $extracted = Join-Path $temporaryDirectory $installer.Name
-            [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $extracted)
-        } finally { $archive.Dispose() }
-        $expectedHash = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash
-        $archiveHash = (Get-FileHash -LiteralPath $extracted -Algorithm SHA256).Hash
-        if ($archiveHash -cne $expectedHash) { throw 'Updater archive differs from distributed installer.' }
-        Assert-WindowsFileSignature $extracted
-    } finally {
-        Remove-Item -LiteralPath $temporaryDirectory -Recurse -Force
+    $updaterSignatures = @(Get-ChildItem -LiteralPath $Directory -File -Force | Where-Object {
+        $_.Name.EndsWith('.exe.sig', [StringComparison]::OrdinalIgnoreCase)
+    })
+    if ($updaterSignatures.Count -ne 1) {
+        throw "Exactly one .exe.sig updater signature is required; found $($updaterSignatures.Count)."
+    }
+    $signatureText = [IO.File]::ReadAllText($updaterSignatures[0].FullName).Trim()
+    if ([string]::IsNullOrWhiteSpace($signatureText) -or $signatureText.Contains([char]0)) {
+        throw 'Updater .exe.sig signature is empty or invalid.'
     }
 }
 

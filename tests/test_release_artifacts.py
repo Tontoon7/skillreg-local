@@ -35,14 +35,12 @@ LAYOUTS = {
         "deb/SkillReg_0.3.25_amd64.deb": b"deb",
         "rpm/SkillReg-0.3.25-1.x86_64.rpm": b"rpm",
         "appimage/SkillReg_0.3.25_amd64.AppImage": b"appimage",
-        "appimage/SkillReg_0.3.25_amd64.AppImage.tar.gz": b"linux archive",
-        "appimage/SkillReg_0.3.25_amd64.AppImage.tar.gz.sig": b"linux tauri signature\n",
+        "appimage/SkillReg_0.3.25_amd64.AppImage.sig": b"linux tauri signature\n",
     },
     "windows-x86_64": {
         "nsis/SkillReg_0.3.25_x64-setup.exe": b"nsis",
+        "nsis/SkillReg_0.3.25_x64-setup.exe.sig": b"windows tauri signature\n",
         "msi/SkillReg_0.3.25_x64_en-US.msi": b"msi",
-        "nsis/SkillReg_0.3.25_x64-setup.nsis.zip": b"windows archive",
-        "nsis/SkillReg_0.3.25_x64-setup.nsis.zip.sig": b"windows tauri signature\n",
     },
 }
 
@@ -99,10 +97,11 @@ class ReleaseArtifactsTests(unittest.TestCase):
         assets = self.root / "assets"
         names = {Path(path).name for path in publication["assets"]}
         self.assertEqual(names, {path.name for path in assets.iterdir()})
-        self.assertEqual(len(names), 17)
+        self.assertEqual(len(names), 14)
         self.assertNotIn("verified-files.json", names)
         self.assertFalse(any(name.endswith(".sig") for name in names))
-        self.assertEqual(len([name for name in names if name.endswith(".asc")]), 5)
+        self.assertEqual(len([name for name in names if name.endswith(".asc")]), 4)
+        self.assertEqual(len([name for name in names if name.endswith(".asc") and name != "skillreg-linux-signing-key.asc"]), 3)
         self.assertEqual((assets / "SkillReg_aarch64.app.tar.gz").read_bytes(), b"arm archive")
         self.assertEqual((assets / "SkillReg_x64.app.tar.gz").read_bytes(), b"x64 archive")
         latest = json.loads((assets / "latest.json").read_text())
@@ -115,6 +114,10 @@ class ReleaseArtifactsTests(unittest.TestCase):
                 "https://github.com/Tontoon7/skillreg-local/releases/download/v0.3.25/"))
             expected = next(directories[platform].glob("*.sig")).read_text().strip()
             self.assertEqual(entry["signature"], expected)
+            if platform == "linux-x86_64":
+                self.assertTrue(file.endswith(".AppImage"))
+            if platform == "windows-x86_64":
+                self.assertTrue(file.endswith(".exe"))
         self.assertIn(FINGERPRINT, (self.root / "notes.md").read_text())
         self.assertIn(SUBJECT, (self.root / "notes.md").read_text())
         self.assertEqual(json.loads((self.root / "publication.json").read_text()), publication)
@@ -146,12 +149,15 @@ class ReleaseArtifactsTests(unittest.TestCase):
 
     def test_collect_ignores_intermediates_and_msi_updater(self):
         bundle = self.bundle("windows-x86_64")
+        (bundle / "msi" / "SkillReg_0.3.25_x64_en-US.msi.sig").write_bytes(b"unused MSI updater signature")
         (bundle / "msi" / "unused.msi.zip").write_bytes(b"not distributed")
         (bundle / "nsis" / "nested").mkdir()
         (bundle / "nsis" / "nested" / "intermediate.exe").write_bytes(b"intermediate")
         output = self.root / "output"
         release.collect(bundle, "windows-x86_64", output)
-        self.assertEqual(len(list(output.iterdir())), 4)
+        self.assertEqual(len(list(output.iterdir())), 3)
+        self.assertTrue((output / "SkillReg_0.3.25_x64-setup.exe.sig").is_file())
+        self.assertFalse(any(path.name.endswith(".msi.sig") for path in output.iterdir()))
 
     def test_collect_rejects_missing_bundle_family(self):
         bundle = self.bundle("linux-x86_64")
@@ -335,7 +341,7 @@ class ReleaseArtifactsTests(unittest.TestCase):
                     "--platform", platform], capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 files = json.loads(result.stdout)
-                self.assertEqual(len(files), 4)
+                self.assertEqual(len(files), 3)
                 for file in files:
                     Path(file + ".asc").write_text("OpenPGP signature")
                 (output / "skillreg-linux-signing-key.asc").write_text("Public key")
@@ -355,6 +361,16 @@ class ReleaseArtifactsTests(unittest.TestCase):
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
+    def test_release_inventory_tracks_native_tauri_updater_outputs(self):
+        config = json.loads((SCRIPT.parents[1] / "src-tauri/tauri.conf.json").read_text())
+        self.assertIs(config["bundle"]["createUpdaterArtifacts"], True)
+        self.assertEqual(release.UPDATERS["linux"], "appimage")
+        self.assertEqual(release.UPDATERS["windows"], "nsis")
+        self.assertEqual(release.LAYOUTS["linux"]["appimage"], ("appimage", ".AppImage"))
+        self.assertEqual(release.LAYOUTS["windows"]["nsis"], ("nsis", ".exe"))
+        self.assertNotIn("updater", release.LAYOUTS["linux"])
+        self.assertNotIn("updater", release.LAYOUTS["windows"])
+
     def test_build_barrier_and_native_checks_are_ordered(self):
         workflow = (SCRIPT.parents[1] / ".github/workflows/release.yml").read_text()
         build = workflow.split("  publish:\n", 1)[0]
@@ -378,6 +394,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('pnpm tauri build --no-bundle --config "$WINDOWS_SIGNING_CONFIG"', precompile)
         self.assertIn("uses: azure/login@", login)
         self.assertIn("shell: bash", token)
+        build_tauri = build_steps[build_index]
+        self.assertLess(
+            build_tauri.index("windows-signing.ps1 -Mode sign -FilePath"),
+            build_tauri.index('pnpm tauri bundle --config "$WINDOWS_SIGNING_CONFIG"'),
+        )
+        self.assertIn("signCommand", build)
         self.assertIn("run: az account get-access-token --scope https://codesigning.azure.net/.default --output none", token)
         for required in ["test-linux-signing.sh", "test-windows-signing.ps1", "linux-signing.sh",
                          "windows-signing.ps1", "release-artifacts.py", "if-no-files-found: error",
