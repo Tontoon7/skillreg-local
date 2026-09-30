@@ -1,6 +1,6 @@
 # Checklist de release — expérience de skills gérées
 
-**État du candidat :** 2026-09-29
+**État du candidat :** 2026-09-30
 **Périmètre :** lot A de l’expérience collaborateur métier
 **Version desktop de travail :** 0.3.25
 **Statut actuel : NO-GO dogfood macOS et NO-GO activation générale.**
@@ -63,7 +63,7 @@ scénario 18 n’a pas un playbook de downgrade vérifié.
 | Cargo check verrouillé | A3 | Voir registre |
 | Garde notarisation | A4 | Voir registre |
 | Confidentialité des erreurs et bundle local | A5 | Voir registre |
-| CI Linux/macOS/Windows sur le SHA candidat | N1 | Échec Windows ; correctif à rejouer |
+| CI Linux/macOS/Windows sur le SHA candidat | N1 | Échec Windows `36503766066` ; correctifs copie propriétaire/groupe et buffer de renommage à rejouer |
 | App tests/types/format/build et bundle CLI | N6 | Preuves externes manquantes |
 | Website lint/build, compatibilité téléchargement | N6 | Preuves externes manquantes |
 | Packaging, signatures, notarisation, updater réel | N7 | Non exécutés pendant cette étape |

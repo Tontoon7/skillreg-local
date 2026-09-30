@@ -32,6 +32,17 @@ function requireState(condition, message) {
 	if (!condition) throw new Error(message);
 }
 
+function requireInventory(actual, expected, message) {
+	if (equal(actual, expected)) return;
+	requireState(actual.length === expected.length, `${message} (entry count)`);
+	const index = actual.findIndex((entry, index) => !equal(entry, expected[index]));
+	const fields = ["path", "type", "mode", "uid", "gid", "target", "sha256", "size", "acl"].filter(
+		(field) => !equal(actual[index][field], expected[index][field]),
+	);
+	// Report only the index and known field names, never profile paths or descriptor values.
+	throw new Error(`${message} (entry ${index}: ${fields.join(", ") || "metadata"})`);
+}
+
 function during(phase, operation) {
 	try {
 		return operation();
@@ -87,9 +98,14 @@ function separate(...paths) {
 
 function native(command, args, input) {
 	const result = spawnSync(command, args, { encoding: "utf8", input, windowsHide: true });
+	const code =
+		command === "powershell.exe"
+			? /^\{"nativeError":([1-9]\d{0,9})\}$/.exec(result.stdout?.trim() || "")?.[1]
+			: null;
+	const detail = code && Number(code) <= 0xffffffff ? ` (Win32 ${code})` : "";
 	requireState(
 		!result.error && result.status === 0,
-		`Required native metadata operation failed: ${command}`,
+		`Required native metadata operation failed: ${command}${detail}`,
 	);
 	return result.stdout.trimEnd();
 }
@@ -97,6 +113,7 @@ function native(command, args, input) {
 // Handles opened with OPEN_REPARSE_POINT operate on junctions themselves, never their targets.
 const windowsMetadata = String.raw`
 $ErrorActionPreference = 'Stop'
+try {
 Add-Type -TypeDefinition @'
 using System;
 using System.ComponentModel;
@@ -129,26 +146,33 @@ public static class ProfileMetadata {
       if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
       byte[] name = System.Text.Encoding.Unicode.GetBytes(destination);
       int offset = Marshal.OffsetOf(typeof(RenameInfo), "FileName").ToInt32();
-      int size = Math.Max(Marshal.SizeOf(typeof(RenameInfo)), offset + name.Length);
+      int size = Math.Max(Marshal.SizeOf(typeof(RenameInfo)), offset + name.Length + 2);
       IntPtr buffer = Marshal.AllocHGlobal(size);
       try {
         // Flags=0 refuses an existing destination; RootDirectory=0 uses the absolute path.
         var info = new RenameInfo { Flags = 0, RootDirectory = IntPtr.Zero, FileNameLength = (uint)name.Length, FileName = 0 };
         Marshal.StructureToPtr(info, buffer, false);
         Marshal.Copy(name, 0, IntPtr.Add(buffer, offset), name.Length);
+        // The Win32 path conversion also needs a terminator, excluded from FileNameLength.
+        Marshal.WriteInt16(buffer, offset + name.Length, 0);
         if (!SetFileInformationByHandle(handle, 3, buffer, (uint)size)) throw new Win32Exception(Marshal.GetLastWin32Error());
       } finally { Marshal.FreeHGlobal(buffer); }
     }
   }
   public static string Access(string path, string replacement, bool write) {
-    using (var handle = CreateFile(path, write ? 0x60000u : 0x20000u, 7, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero)) {
+    uint flags = 4;
+    if (write && replacement.Contains("O:")) flags |= 1;
+    if (write && replacement.Contains("G:")) flags |= 2;
+    uint access = write ? 0x60000u : 0x20000u;
+    if (write && (flags & 3) != 0) access |= 0x80000u;
+    using (var handle = CreateFile(path, access, 7, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero)) {
       if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
       if (write) {
         IntPtr next; uint size;
         if (!ConvertStringSecurityDescriptorToSecurityDescriptor(replacement, 1, out next, out size)) throw new Win32Exception(Marshal.GetLastWin32Error());
         try {
           // Clones already allow inheritance. Do not request a fresh inheritance pass over the saved DACL.
-          uint flags = replacement.Contains("D:P") ? 0x80000004u : 4u;
+          if (replacement.Contains("D:P")) flags |= 0x80000000u;
           if (!SetKernelObjectSecurity(handle, flags, next)) throw new Win32Exception(Marshal.GetLastWin32Error());
         } finally { LocalFree(next); }
       }
@@ -184,6 +208,14 @@ $results = @($requests | ForEach-Object {
   }
 })
 ConvertTo-Json -InputObject $results -Compress
+} catch {
+  $exception = $_.Exception
+  while ($null -ne $exception.InnerException) { $exception = $exception.InnerException }
+  if ($exception -is [System.ComponentModel.Win32Exception]) {
+    ConvertTo-Json -InputObject @{nativeError=$exception.NativeErrorCode} -Compress
+  }
+  exit 1
+}
 `;
 
 export function winMetadata(requests) {
@@ -352,8 +384,9 @@ function clone(source, destination, entries) {
 		if (entry.type === "directory") flushDirectory(join(destination, entry.path));
 	}
 	flushDirectory(destination);
-	requireState(
-		equal(inventory(destination), entries),
+	requireInventory(
+		inventory(destination),
+		entries,
 		"Copied content or permissions do not match the inventory",
 	);
 }
@@ -423,8 +456,9 @@ function verify(home, backup) {
 		);
 		seen.add(entry.path);
 	}
-	requireState(
-		equal(inventory(join(backup, "data")), manifest.entries),
+	requireInventory(
+		inventory(join(backup, "data")),
+		manifest.entries,
 		"Backup inventory is incomplete or corrupted",
 	);
 	return manifest;
@@ -509,10 +543,7 @@ function restore(home, backup, recovery, target, afterRename) {
 			});
 		}
 	}
-	requireState(
-		equal(inventory(home), target.entries),
-		"Restored profile does not match the backup",
-	);
+	requireInventory(inventory(home), target.entries, "Restored profile does not match the backup");
 	const pending = `${journalPath}.next`;
 	const completed = { version: 1, home, backup, targetHash, status: "complete" };
 	if (stat(pending)) {

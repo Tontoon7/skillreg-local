@@ -13,7 +13,7 @@ choisi n’ont pas une preuve applicable au candidat.
 - Candidat : base + diff de cette PR. Les journaux et l’empreinte des sources testées sont
   conservés dans le dossier de sortie de l’étape usine avec `rapport.json`. À la livraison,
   rattacher ces preuves au SHA créé par l’orchestrateur et rejouer la CI sur ce SHA.
-- Session locale reprise et revalidée : 2026-09-29, macOS 26.6.2 (25G83), Darwin arm64, Node 26.8.1, pnpm 9.15.9,
+- Session locale reprise et revalidée : 2026-09-30, macOS 26.6.2 (25G83), Darwin arm64, Node 26.8.1, pnpm 9.15.9,
   Rust/Cargo 1.96.1. La CI choisit Node 22 et reste à exécuter.
 - Aucun vrai agent lancé, aucun trousseau personnel ni donnée de production consulté.
   Les providers réseau et identifiants sont simulés ; les tests utilisent des homes injectés.
@@ -24,14 +24,14 @@ choisi n’ont pas une preuve applicable au candidat.
 
 Les sorties finales, compteurs et restrictions sont consignés après exécution dans ce tableau.
 `PASS local` ne signifie jamais PASS Windows, Linux, lecteur d’écran ou agent réel.
-Après correction de la lecture des ACL Windows, A1–A3 ont été rejoués sur `c2fbc91`
+Après correction de la copie des descripteurs et du buffer de renommage Windows, A1–A3 ont été rejoués sur `26258ed`
 avec le diff de correction : résultats ci-dessous, journaux dans la sortie
-`resumed/ci-3-correction`. A4–A5 restent les vérifications précédentes, non réexécutées
+`recovery-1/ci-1-correction`. A4–A5 restent les vérifications précédentes, non réexécutées
 pendant cette correction ; aucun workflow n’a changé.
 
 | ID | Commande / inspection | Résultat courant et portée |
 | --- | --- | --- |
-| A1 | `pnpm format:check && pnpm build && cargo test --manifest-path src-tauri/Cargo.toml --locked && node --test --experimental-strip-types tests/*.test.ts` | **Format et build PASS ; Cargo 89 unitaires PASS / 4 échecs socket sandbox, code 101.** La chaîne s’arrête avant Node. Exécution complète `--no-fail-fast` : **144 PASS / 4 mêmes échecs**, aucun test ignoré. Node lancé séparément : **54/54 PASS**. Voir `factory-validation.log`, `rust-all.log`, `node-factory.log`. |
+| A1 | `pnpm format:check && pnpm build && cargo test --manifest-path src-tauri/Cargo.toml --locked && node --test --experimental-strip-types tests/*.test.ts` | **Format et build PASS ; Cargo 89 unitaires PASS / 4 échecs socket sandbox, code 101.** La chaîne s’arrête avant Node. Exécution complète `--no-fail-fast` : **144 PASS / 4 mêmes échecs**, aucun test ignoré. Node lancé séparément : **55/55 PASS** ; commande CI `pnpm test:node` également **55/55 PASS**. Voir `factory-validation.log`, `rust-all.log`, `node-factory.log`, `node-ci.log`. |
 | A2 | `pnpm test:frontend` | **72/72 PASS, 18 fichiers**, DOM jsdom/IPC simulé seulement ; `frontend.log`. |
 | A3 | `cargo check --manifest-path src-tauri/Cargo.toml --locked` | **PASS**, `cargo-check.log`, compilation macOS arm64 uniquement. |
 | A4 | `bash scripts/check-release-notarization.sh` | **PASS**, présence des commandes, pas notarisation réelle ; sortie « Release workflow contains macOS notarization hooks. ». |
@@ -276,6 +276,33 @@ correction (**54/54**, `node-before.log`, `node-after.log`) ; ce n’est pas une
 rouge/verte Windows. La revue indépendante n’a relevé aucun défaut concret du correctif.
 Les résultats locaux complets figurent dans A1–A3 ; N1 reste ouverte et la release **NO-GO**.
 
+Correction après le run `36503766066`, job `109200402364` : **copie des descripteurs et
+buffer de renommage corrigés ; confirmation Windows requise**. Le journal fourni signale
+une divergence pendant le clonage et un échec natif du premier renommage, avant le hook
+d’interruption. Il n’indique ni le champ divergent ni le code Win32 ; le lien causal précis
+avec les défauts ci-dessous ne peut pas être confirmé depuis macOS.
+
+L’inspection a établi deux défauts du helper : il compare propriétaire, groupe et DACL
+(masque `7`) mais écrivait seulement la DACL (`4`) ; le nom dans `FILE_RENAME_INFO` était
+copié dans un buffer non initialisé sans terminateur UTF-16 explicite. Les copies écrivent
+désormais les champs propriétaire/groupe présents, avec `WRITE_OWNER` ; les demandes
+`private` restent limitées à la DACL. Un droit insuffisant provoque un refus, sans abandonner
+ces champs. Le buffer réserve et écrit deux octets nuls après le nom, exclus de
+`FileNameLength`. `RootDirectory` reste nul et aucune réapplication d’ACL ne suit les swaps.
+
+Un test natif Windows impose un groupe primaire différent de celui d’un fichier nouvellement
+créé, puis vérifie exactement le descripteur sauvegardé. Le test de renommage utilise un
+chemin long avec accents, vérifie le refus d’une destination existante et conserve les
+comparaisons d’ACL avant/après aller-retour. Ces tests ne tournent pas sur macOS.
+
+Les diagnostics indiquent désormais le premier index et les seuls noms de champs divergents,
+ainsi que le code Win32 numérique filtré. Aucun chemin, descripteur, contenu ou stderr natif
+n’est affiché. Les tests portables ont d’abord reproduit l’absence de ces diagnostics, puis
+passent après correction ; ils couvrent aussi le refus d’une sortie native contenant des
+champs supplémentaires ou une valeur invalide. Aucun workflow ni contrôle n’est assoupli.
+Résultats locaux courants : A1–A3. La revue indépendante n’a relevé aucun défaut bloquant.
+Rejouer la CI Windows sur le SHA livré ; N1/N5 restent ouvertes et la release **NO-GO**.
+
 ## N2 — Campagne native isolée et découverte des agents
 
 Exécuter les scénarios 1–21 dans un compte OS de test dédié, avec un profil sauvegardé selon N4,
@@ -359,7 +386,10 @@ après interruption de processus autour des swaps est testée ; aucune résistan
 
 Sous Windows, les racines sont renommées par handle et leurs descripteurs sont lus bruts par
 `GetKernelObjectSecurity`, afin de comparer les marqueurs d’héritage et de protection sans
-interprétation selon le parent. La conservation exacte doit encore être confirmée en CI Windows.
+interprétation selon le parent. Le clonage restaure aussi propriétaire et groupe lorsqu’ils
+sont présents dans le descripteur ; les droits nécessaires doivent être disponibles, sinon
+la copie est refusée. Le nom UTF-16 du renommage est terminé explicitement, sans inclure le
+terminateur dans sa longueur. La conservation exacte doit encore être confirmée en CI Windows.
 Aucune réapplication des permissions ne suit le déplacement : une
 interruption peut reprendre à partir des inventaires exacts. Les junctions sont ouvertes sans
 suivre leur cible ; une destination apparue entre le contrôle et le renommage provoque un refus.

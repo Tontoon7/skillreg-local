@@ -131,19 +131,74 @@ test("Windows metadata still rejects native failures, malformed JSON and missing
 	assert.throws(() => winMetadata([rename]), SyntaxError);
 });
 
+test("Windows metadata reports only validated native error codes", async (t) => {
+	const { winMetadata } = await import("../scripts/managed-skills-backup-restore.mjs");
+	let stdout = '{"nativeError":123}';
+	t.mock.method(process.getBuiltinModule("child_process"), "spawnSync", () => ({
+		status: 1,
+		stdout,
+		stderr: "private profile path and descriptor",
+	}));
+	syncBuiltinESMExports();
+	t.after(() => {
+		t.mock.restoreAll();
+		syncBuiltinESMExports();
+	});
+	const requests = [{ path: "source", destination: "destination" }];
+	assert.throws(() => winMetadata(requests), {
+		message: "Required native metadata operation failed: powershell.exe (Win32 123)",
+	});
+	for (const output of [
+		'{"nativeError":"private profile path"}',
+		'{"nativeError":4294967296}',
+		'{"nativeError":0}',
+		'{"nativeError":123,"path":"private profile path"}',
+		"private native error",
+	]) {
+		stdout = output;
+		assert.throws(() => winMetadata(requests), {
+			message: "Required native metadata operation failed: powershell.exe",
+		});
+	}
+});
+
 if (process.platform === "win32") {
+	test("Windows ACL cloning restores an explicit primary group", async (t) => {
+		const paths = fixture();
+		t.after(() => rmSync(paths.root, { recursive: true, force: true }));
+		const { winMetadata } = await import("../scripts/managed-skills-backup-restore.mjs");
+		const source = join(paths.home, ".skillreg/config.json");
+		const before = winMetadata([{ path: source }])[0];
+		const group = before.includes("G:BU") ? "AU" : "BU";
+		const replacement = before.replace(/G:[^:]+(?=D:)/, `G:${group}`);
+		assert.notEqual(replacement, before);
+		const [changed] = winMetadata([{ path: source, acl: replacement }]);
+		assert.equal(changed, replacement);
+		success(run("snapshot", paths));
+		success(run("verify", paths));
+	});
+
 	test("Windows native rename preserves inherited ACLs under a private parent and back", async (t) => {
 		const paths = fixture();
 		t.after(() => rmSync(paths.root, { recursive: true, force: true }));
 		const { winMetadata } = await import("../scripts/managed-skills-backup-restore.mjs");
 		const source = join(paths.home, ".skillreg");
-		const parent = join(paths.root, "private parent été");
+		const parent = join(paths.root, `private parent été ${"long-path-".repeat(5)}`);
 		const destination = join(parent, ".skillreg");
 		mkdirSync(parent);
 		winMetadata([{ path: parent, acl: "private" }]);
 		const before = winMetadata([{ path: source }]);
 		assert.match(before[0], /\(A;[^;]*ID;/);
 		assert.doesNotMatch(before[0], /D:P/);
+		mkdirSync(destination);
+		writeFileSync(join(destination, "keep.txt"), "existing destination");
+		assert.throws(
+			() => winMetadata([{ path: source, destination }]),
+			/Required native metadata operation failed: powershell.exe \(Win32 \d+\)/,
+		);
+		assert.equal(readFileSync(join(destination, "keep.txt"), "utf8"), "existing destination");
+		assert.deepEqual(winMetadata([{ path: source }]), before);
+		rmSync(destination, { recursive: true });
 		assert.deepEqual(winMetadata([{ path: source, destination }]), ["renamed"]);
 		assert.equal(existsSync(source), false);
 		assert.deepEqual(winMetadata([{ path: destination }]), before);
@@ -247,7 +302,14 @@ test("missing, corrupted and path-traversal inventories cannot restore or write 
 	assert.equal(existsSync(paths.recovery), false);
 	writeFileSync(inventoryPath, inventoryText);
 	writeFileSync(join(paths.backup, "data/.skillreg/config.json"), "corrupted");
-	assert.notEqual(run("verify", paths).status, 0);
+	const corrupted = run("verify", paths);
+	assert.notEqual(corrupted.status, 0);
+	assert.match(
+		corrupted.stderr,
+		/Backup inventory is incomplete or corrupted \(entry \d+: sha256, size\)/,
+	);
+	assert.equal(corrupted.stderr.includes(paths.backup), false);
+	assert.equal(corrupted.stderr.includes("config.json"), false);
 	assert.notEqual(run("restore", paths, ["--apply", "--recovery", paths.recovery]).status, 0);
 	assert.equal(
 		readFileSync(join(paths.home, ".skillreg/config.json"), "utf8"),
