@@ -25,6 +25,8 @@ import { fileURLToPath } from "node:url";
 
 const roots = [".skillreg", ".claude", ".codex", ".cursor", ".agents"];
 const windows = process.platform === "win32";
+// Node 22 JS realpath mis-probes namespaced drive roots; retain native Windows resolution.
+const realpath = windows ? realpathSync.native : realpathSync;
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 const equal = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 
@@ -75,10 +77,10 @@ function canonical(path) {
 	);
 	if (stat(resolved)) {
 		requireState(!lstatSync(resolved).isSymbolicLink(), "A profile or backup cannot be a link");
-		return realpathSync(resolved);
+		return realpath(resolved);
 	}
 	directory(dirname(resolved));
-	return join(realpathSync(dirname(resolved)), basename(resolved));
+	return join(realpath(dirname(resolved)), basename(resolved));
 }
 
 function separate(...paths) {
