@@ -184,6 +184,37 @@ test("Windows metadata reports only validated native error codes", async (t) => 
 	}
 });
 
+test("Windows protected DACL writes never fall through to the kernel security setter", async (t) => {
+	const { winMetadata } = await import("../scripts/managed-skills-backup-restore.mjs");
+	let nativeSource = "";
+	t.mock.method(
+		process.getBuiltinModule("child_process"),
+		"spawnSync",
+		(_command: string, args: string[]) => {
+			nativeSource = Buffer.from(args[args.length - 1], "base64").toString("utf16le");
+			return { status: 0, stdout: '["D:P(A;;FA;;;SY)"]' };
+		},
+	);
+	syncBuiltinESMExports();
+	t.after(() => {
+		t.mock.restoreAll();
+		syncBuiltinESMExports();
+	});
+	winMetadata([{ path: "fixture", acl: "private" }]);
+	const branches = nativeSource.match(
+		/if \(\(control & 0x1000\) != 0\) \{([^{}]+)\} else \{([^{}]+)\}\s*\} finally \{ LocalFree\(next\); \}/,
+	);
+	assert.ok(branches, "Protected and inherited DACL writes must use exclusive branches");
+	assert.match(branches[1], /SetSecurityInfo\(handle, 1, flags \| 0x80000000u,/);
+	assert.doesNotMatch(branches[1], /(?:SetKernelObjectSecurity|SetSecurityDescriptorControl)\(/);
+	assert.match(
+		branches[2],
+		/if \(\(control & 0x0400\) != 0 && !SetSecurityDescriptorControl\(next, 0x0100, 0x0100\)\)/,
+	);
+	assert.match(branches[2], /SetKernelObjectSecurity\(handle, flags, next\)/);
+	assert.doesNotMatch(branches[2], /SetSecurityInfo\(/);
+});
+
 if (process.platform === "win32") {
 	test("Windows ACL cloning preserves auto-inheritance without copying the destination parent ACL", async (t) => {
 		const paths = fixture();

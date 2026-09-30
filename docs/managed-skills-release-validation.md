@@ -24,14 +24,14 @@ choisi n’ont pas une preuve applicable au candidat.
 
 Les sorties finales, compteurs et restrictions sont consignés après exécution dans ce tableau.
 `PASS local` ne signifie jamais PASS Windows, Linux, lecteur d’écran ou agent réel.
-Après correction de l’écriture des bits d’auto-héritage Windows, A1–A3 ont été rejoués sur `2055060`
+Après correction des branches d’écriture ACL Windows, A1–A4 ont été rejoués sur `caacd5a`
 avec le diff de correction : résultats ci-dessous, journaux dans la sortie
-`recovery-1/ci-3-correction`. A4–A5 restent les vérifications précédentes, non réexécutées
+`recovery-1/ci-3-review-1-correction`. A5 reste la vérification précédente, non réexécutée
 pendant cette correction ; aucun workflow n’a changé.
 
 | ID | Commande / inspection | Résultat courant et portée |
 | --- | --- | --- |
-| A1 | `pnpm format:check && pnpm build && cargo test --manifest-path src-tauri/Cargo.toml --locked && node --test --experimental-strip-types tests/*.test.ts` | **Format et build PASS ; Cargo 89 unitaires PASS / 4 échecs socket sandbox, code 101.** La chaîne s’arrête avant Node. Exécution complète `--no-fail-fast` : **144 PASS / 4 mêmes échecs**, aucun test ignoré. Node lancé séparément : **55/55 PASS** ; commande CI `pnpm test:node` également **55/55 PASS**. Voir `factory-validation.log`, `rust-all.log`, `node-factory.log`, `node-ci.log`. |
+| A1 | `pnpm format:check && pnpm build && cargo test --manifest-path src-tauri/Cargo.toml --locked && node --test --experimental-strip-types tests/*.test.ts` | **Format et build PASS ; Cargo 89 unitaires PASS / 4 échecs socket sandbox, code 101.** La chaîne s’arrête avant Node. Exécution complète `--no-fail-fast` : **144 PASS / 4 mêmes échecs**, aucun test ignoré. Node lancé séparément : **56/56 PASS**. Voir `factory-validation.log`, `rust-all.log`, `node-factory.log`. |
 | A2 | `pnpm test:frontend` | **72/72 PASS, 18 fichiers**, DOM jsdom/IPC simulé seulement ; `frontend.log`. |
 | A3 | `cargo check --manifest-path src-tauri/Cargo.toml --locked` | **PASS**, `cargo-check.log`, compilation macOS arm64 uniquement. |
 | A4 | `bash scripts/check-release-notarization.sh` | **PASS**, présence des commandes, pas notarisation réelle ; sortie « Release workflow contains macOS notarization hooks. ». |
@@ -340,9 +340,10 @@ Le helper lit maintenant le contrôle du descripteur converti avec
 `GetSecurityDescriptorControl`. Si `SE_DACL_AUTO_INHERITED` (`0x0400`) est présent,
 il ajoute `SE_DACL_AUTO_INHERIT_REQ` (`0x0100`) à la demande d’écriture brute : le
 noyau doit consommer cette demande et conserver `AI` dans le descripteur stocké.
-La protection reste appliquée explicitement par `SetSecurityInfo` lorsqu’elle est demandée,
-puis la copie brute restaure aussi les bits d’auto-héritage dans ce cas. Aucun recalcul depuis
-le parent de sauvegarde, privilège supplémentaire ou normalisation de l’inventaire n’est ajouté.
+Cette tentative appelait aussi l’écriture brute après `SetSecurityInfo` pour une DACL protégée.
+La revue suivante a identifié ce branchement comme une régression possible de la protection ;
+le correctif ci-dessous remplace cette séquence. Aucun recalcul depuis le parent de sauvegarde,
+privilège supplémentaire ou normalisation de l’inventaire n’est ajouté.
 
 Le nouveau test Windows crée dossier, fichier et junction sous un parent doté d’une ACE
 `BU` absente des sources. Il exige `AI` et des ACE `ID` dans les sources, puis l’égalité
@@ -352,11 +353,28 @@ restauration, groupe primaire, renommage et interruption gardent leurs assertion
 
 `pnpm test:node` passe localement avant correction (**55/55**), mais les quatre tests
 spécifiques Windows ne sont pas exécutés sur macOS. Le journal CI fourni démontre l’échec
-initial ; aucune reproduction rouge/verte Windows n’est revendiquée. La revue indépendante
-n’a relevé aucun défaut bloquant ; le cas `PAI` demandé par la revue a été ajouté.
-Aucun workflow ni contrôle n’est modifié. Les résultats courants sont A1–A3 ; le prochain
+initial ; aucune reproduction rouge/verte Windows n’est revendiquée. Le cas `PAI` a été ajouté,
+mais la revue suivante a relevé le défaut de branchement décrit ci-dessous.
+Aucun workflow ni contrôle n’est modifié. Le prochain
 run Windows doit confirmer la consommation de `AR`, la conservation de `AI`/`P` et des ACE.
 N1/N5 restent ouvertes et la release **NO-GO**.
+
+Correction après revue (`recovery-1/ci-3-review-1-correction`) : **branches ACL exclusives**.
+Une DACL protégée (`SE_DACL_PROTECTED`) est écrite uniquement par `SetSecurityInfo` avec
+`PROTECTED_DACL_SECURITY_INFORMATION`, sans appel ultérieur à `SetKernelObjectSecurity`.
+Pour une DACL non protégée seulement, la présence de `AI` ajoute `AR` au descripteur avant
+`SetKernelObjectSecurity`. Le traitement des champs propriétaire/groupe et les vérifications
+des codes Win32 restent identiques.
+
+Le test portable capture et décode le vrai `-EncodedCommand` transmis au processus simulé.
+Il échoue avant correction sur l’absence de branches exclusives (`acl-branches-red.log`),
+puis passe avec les **15/15 tests locaux** de sauvegarde/restauration (`acl-branches-green.log`).
+Il vérifie les appels possibles, sans exécuter C# ou prouver les ACL NTFS. Les assertions
+natives d’égalité exacte après réouverture, y compris celles de `P` et `PAI`, sont inchangées.
+La conservation de `AI` sur une DACL protégée `PAI` par `SetSecurityInfo` seul n’est pas démontrée
+et ce test peut encore échouer sur Windows. Aucun appel kernel de repli n’est autorisé pour
+forcer ce cas : les comparaisons complètes du snapshot/refus d’un inventaire divergent restent
+bloquantes. N1/N5 et la release restent **NO-GO** jusqu’à la preuve Windows applicable au candidat.
 
 ## N2 — Campagne native isolée et découverte des agents
 
