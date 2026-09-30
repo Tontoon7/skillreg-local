@@ -1,3 +1,4 @@
+import { PublishCommandDialog } from "@/components/PublishCommandDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,6 +24,7 @@ import {
 	Search,
 	Terminal,
 	Trash2,
+	Upload,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
@@ -75,11 +77,21 @@ export function Commands() {
 	const [scope, setScope] = useState<ScopeType>(config.defaultScope || "project");
 	const [projectDir, setProjectDir] = useState<string | null>(null);
 	const [actionLoading, setActionLoading] = useState<string | null>(null);
+	const [publishTarget, setPublishTarget] = useState<{ org: string; name: string } | null>(null);
+	const [publication, setPublication] = useState<{ org: string; reference: string } | null>(null);
+	const [loadedOrg, setLoadedOrg] = useState<string | null>(null);
 
 	const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+	const requestRef = useRef(0);
+	const activeRef = useRef(false);
 
 	const load = useCallback(async () => {
-		if (!org) return;
+		if (!org || !activeRef.current || useConfigStore.getState().config.org !== org) return;
+		const request = ++requestRef.current;
+		const isCurrent = () =>
+			activeRef.current &&
+			request === requestRef.current &&
+			useConfigStore.getState().config.org === org;
 		setLoading(true);
 		setError(null);
 		try {
@@ -87,17 +99,39 @@ export function Commands() {
 				listCommands(org),
 				listLocalCommands({ org }).catch(() => []),
 			]);
+			if (!isCurrent()) return;
 			setCommands(registry);
 			setLocalCommands(local);
 		} catch (e) {
-			setError(typeof e === "string" ? e : "Failed to load commands");
+			if (isCurrent()) {
+				setError(
+					typeof e === "string" ? `Failed to load commands: ${e}` : "Failed to load commands",
+				);
+			}
 		} finally {
-			setLoading(false);
+			if (isCurrent()) {
+				setLoadedOrg(org);
+				setLoading(false);
+			}
 		}
 	}, [org]);
 
 	useEffect(() => {
-		load();
+		activeRef.current = true;
+		setCommands([]);
+		setLocalCommands([]);
+		setLoadedOrg(null);
+		setPublishTarget(null);
+		setPublication(null);
+		setActionLoading(null);
+		setSearch("");
+		setDebouncedSearch("");
+		void load();
+		return () => {
+			activeRef.current = false;
+			requestRef.current += 1;
+			clearTimeout(debounceRef.current);
+		};
 	}, [load]);
 
 	const handleSearch = (value: string) => {
@@ -166,7 +200,7 @@ export function Commands() {
 		} catch (e) {
 			notify("Install failed", typeof e === "string" ? e : "Command install failed");
 		} finally {
-			setActionLoading(null);
+			if (activeRef.current && useConfigStore.getState().config.org === org) setActionLoading(null);
 		}
 	};
 
@@ -190,7 +224,7 @@ export function Commands() {
 		} catch (e) {
 			notify("Update failed", typeof e === "string" ? e : "Command update failed");
 		} finally {
-			setActionLoading(null);
+			if (activeRef.current && useConfigStore.getState().config.org === org) setActionLoading(null);
 		}
 	};
 
@@ -204,6 +238,7 @@ export function Commands() {
 				agent: record.agent,
 				scope: record.scope,
 			});
+			if (!activeRef.current || useConfigStore.getState().config.org !== org) return;
 			setLocalCommands((prev) =>
 				prev.filter(
 					(candidate) =>
@@ -214,7 +249,7 @@ export function Commands() {
 		} catch (e) {
 			notify("Remove failed", typeof e === "string" ? e : "Command remove failed");
 		} finally {
-			setActionLoading(null);
+			if (activeRef.current && useConfigStore.getState().config.org === org) setActionLoading(null);
 		}
 	};
 
@@ -230,7 +265,7 @@ export function Commands() {
 		);
 	}
 
-	if (loading) {
+	if (loadedOrg !== org) {
 		return (
 			<div className="flex h-full items-center justify-center">
 				<Loader2 className="size-6 animate-spin text-muted-foreground" />
@@ -244,17 +279,28 @@ export function Commands() {
 				<div>
 					<h1 className="text-lg font-semibold">{org} — Commands</h1>
 					<p className="text-sm text-muted-foreground">
-						Install slash commands for Claude, Codex, and Cursor.
+						Publish and install slash commands for Claude, Codex, and Cursor.
 					</p>
 				</div>
-				<Button variant="outline" size="sm" onClick={load}>
-					<RefreshCw className="size-3.5" />
+				<Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
+					<RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
 					Refresh
 				</Button>
 			</div>
 
+			<output aria-live="polite">
+				{publication?.org === org && (
+					<span className="block rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm">
+						Published {publication.reference}. Local installs are unchanged.
+					</span>
+				)}
+			</output>
+
 			{error && (
-				<div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+				<div
+					role="alert"
+					className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+				>
 					{error}
 				</div>
 			)}
@@ -359,19 +405,29 @@ export function Commands() {
 													)}
 												</div>
 											</div>
-											<Button
-												size="sm"
-												onClick={() => handleInstall(command)}
-												disabled={loadingKey || incompatible}
-												title={incompatible ? `Not compatible with ${installAgent}` : undefined}
-											>
-												{loadingKey ? (
-													<Loader2 className="size-3.5 animate-spin" />
-												) : (
-													<Download className="size-3.5" />
-												)}
-												Install
-											</Button>
+											<div className="flex shrink-0 flex-col gap-2">
+												<Button
+													variant="outline"
+													size="sm"
+													onClick={() => setPublishTarget({ org, name: command.name })}
+												>
+													<Upload className="size-3.5" />
+													Publish version
+												</Button>
+												<Button
+													size="sm"
+													onClick={() => handleInstall(command)}
+													disabled={loadingKey || incompatible}
+													title={incompatible ? `Not compatible with ${installAgent}` : undefined}
+												>
+													{loadingKey ? (
+														<Loader2 className="size-3.5 animate-spin" />
+													) : (
+														<Download className="size-3.5" />
+													)}
+													Install
+												</Button>
+											</div>
 										</div>
 									</div>
 								);
@@ -458,6 +514,24 @@ export function Commands() {
 					)}
 				</section>
 			</div>
+			{publishTarget?.org === org && (
+				<PublishCommandDialog
+					key={`${publishTarget.org}/${publishTarget.name}`}
+					org={publishTarget.org}
+					name={publishTarget.name}
+					onClose={() => setPublishTarget(null)}
+					onPublished={(version) => {
+						if (!activeRef.current || useConfigStore.getState().config.org !== publishTarget.org)
+							return;
+						setPublication({
+							org: publishTarget.org,
+							reference: `${formatCommandRef(publishTarget.org, publishTarget.name)}@${version.version}`,
+						});
+						setPublishTarget(null);
+						void load();
+					}}
+				/>
+			)}
 		</div>
 	);
 }

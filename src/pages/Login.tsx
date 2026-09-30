@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { loginInitiate, loginPoll, loginWithToken, openUrl, whoami } from "@/lib/api";
 import { API_BASE_URL } from "@/lib/constants";
+import { resolveDevicePolling } from "@/lib/device-polling";
 import { useAuthStore } from "@/lib/store";
 import { Copy, ExternalLink, Key, Loader2 } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
@@ -36,8 +37,9 @@ export function Login() {
 		setDevice({ userCode: null, polling: false, error: null });
 
 		try {
-			const { deviceCode, userCode, verificationUrl } = await loginInitiate();
+			const { deviceCode, userCode, verificationUrl, expiresIn, interval } = await loginInitiate();
 			const fullUrl = `${API_BASE_URL}${verificationUrl}`;
+			const polling = resolveDevicePolling({ expiresIn, interval });
 
 			setDevice({ userCode, polling: true, error: null });
 
@@ -48,8 +50,8 @@ export function Login() {
 			}
 
 			pollingRef.current = true;
-			for (let i = 0; i < 100 && pollingRef.current; i++) {
-				await new Promise((r) => setTimeout(r, 3000));
+			for (let i = 0; i < polling.maxAttempts && pollingRef.current; i++) {
+				await new Promise((r) => setTimeout(r, polling.intervalMs));
 				if (!pollingRef.current) break;
 
 				try {

@@ -9,6 +9,8 @@ pub struct DeviceFlowResponse {
     pub device_code: String,
     pub user_code: String,
     pub verification_url: String,
+    pub expires_in: Option<u64>,
+    pub interval: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -43,6 +45,7 @@ pub async fn login_initiate() -> Result<DeviceFlowResponse, String> {
     let client = reqwest::Client::new();
     let resp = client
         .post(format!("{}/api/v1/auth/cli/initiate", API_BASE_URL))
+        .header("x-client-type", "desktop")
         .send()
         .await
         .map_err(|e| format!("Network error: {}", e))?;

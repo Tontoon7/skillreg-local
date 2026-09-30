@@ -1,6 +1,6 @@
 # SkillReg Local — Roadmap
 
-> Dernière mise à jour : 2026-05-29
+> Dernière mise à jour : 2026-07-23
 
 ---
 
@@ -32,7 +32,8 @@
 
 - [x] Device flow login (initiate + poll + open browser) — via Rust reqwest
 - [x] Token manual login
-- [x] Setup wizard (org, agent, scope)
+- [x] Setup wizard (org, agent, scope), bloqué tant qu'aucun workspace n'existe
+- [x] Création du workspace dans le navigateur + rafraîchissement des organisations
 - [x] Dashboard avec liste des orgs
 - [x] Stockage token dans `~/.skillreg/config.json`
 - [x] Logout
@@ -48,6 +49,7 @@
 - [x] Filtres : tags, tri
 - [x] Skill detail (markdown, onglets)
 - [x] Pull/install (download + SHA-256 + extraction)
+- [x] Attribution explicite des installations registre au client `desktop`
 - [x] Sélecteur agent/scope
 - [x] Badge "Installed"
 - [x] Progress indicator
@@ -76,7 +78,8 @@
 - [x] Support des chemins locaux commands : `.claude/commands`, `.cursor/commands`, `.codex/skills`
 - [x] Manifest local partagé avec le CLI : `~/.skillreg/commands.json`
 - [x] Vue des commands installées localement avec update et remove
-- [ ] Création/publication de nouvelles versions de commands depuis le desktop
+- [x] Publier une nouvelle version d'une commande existante depuis le desktop
+- [ ] Créer une nouvelle commande depuis le desktop
 
 ---
 
@@ -133,4 +136,10 @@
 - [x] Packaging (.dmg, .msi, .AppImage) — config prête
 - [x] CI/CD GitHub Actions
 - [x] Releases macOS signées + notarized en CI (requiert secrets Apple GitHub)
+- [x] CSP Tauri restrictive pour assets embarqués, IPC et API SkillReg
+- [x] Tauri/Rust mis à jour (`tauri 2.11.5`, `tauri-build 2.6.3`, `tar 0.4.46`) et lockfile audité
+- [x] Artifacts updater au format natif Tauri 2 et install CI en lockfile figé
+- [x] Packaging local non signé via `pnpm tauri:build:local`
+- [x] Bundle frontend découpé en chunks bornés (plus d'alerte > 500 kB)
+- [x] Validation finale : 17 tests TypeScript, 35 tests Rust, format, Clippy strict, audits et bundle `.app`
 - [ ] Page téléchargement skillreg.dev

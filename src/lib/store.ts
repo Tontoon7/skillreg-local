@@ -6,7 +6,7 @@ interface AuthState {
 	authenticated: boolean;
 	loading: boolean;
 	user: WhoamiResponse | null;
-	checkAuth: () => Promise<void>;
+	checkAuth: () => Promise<WhoamiResponse | null>;
 	setAuthenticated: (user: WhoamiResponse) => void;
 	logout: () => Promise<void>;
 }
@@ -21,12 +21,14 @@ export const useAuthStore = create<AuthState>((set) => ({
 			const config = await readConfig();
 			if (!config.token) {
 				set({ authenticated: false, loading: false, user: null });
-				return;
+				return null;
 			}
 			const user = await whoami();
 			set({ authenticated: true, loading: false, user });
+			return user;
 		} catch {
 			set({ authenticated: false, loading: false, user: null });
+			return null;
 		}
 	},
 

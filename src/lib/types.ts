@@ -1,5 +1,6 @@
 export type AgentType = "claude" | "codex" | "cursor";
 export type ScopeType = "project" | "user";
+export type CommandPublicationScope = "org" | "project" | "user";
 
 // Config stored in ~/.skillreg/config.json
 export interface SkillregConfig {
@@ -32,6 +33,8 @@ export interface DeviceFlowResponse {
 	deviceCode: string;
 	userCode: string;
 	verificationUrl: string;
+	expiresIn?: number;
+	interval?: number;
 }
 
 export interface PollResponse {
@@ -207,6 +210,13 @@ export interface CommandVersion {
 	content: string;
 	agentCompatibility: AgentType[];
 	scope?: string | null;
+}
+
+export interface PublishCommandVersionInput {
+	version: string;
+	content: string;
+	agentCompatibility: AgentType[];
+	scope: CommandPublicationScope;
 }
 
 export interface RegistryCommandDetail extends RegistryCommand {
