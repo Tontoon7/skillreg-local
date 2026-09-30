@@ -268,10 +268,14 @@ if (process.platform === "win32") {
 		const variants = ["D:P", "D:PAI"].map((flags) => before.replace(/D:P(?:AI)?(?=\()/, flags));
 		assert.notEqual(variants[0], variants[1]);
 		for (const acl of variants) {
-			assert.deepEqual(winMetadata([{ path: source, acl }]), [acl]);
-			assert.deepEqual(winMetadata([{ path: source }]), [acl]);
-			assert.deepEqual(winMetadata([{ path: destination, acl }]), [acl]);
-			assert.deepEqual(winMetadata([{ path: destination }]), [acl]);
+			// The file API marks the current inheritance model with AI, even for a protected DACL.
+			// Normalize only this bookkeeping flag; owner, group, ACEs and protection must match exactly.
+			const expected = acl.replace(/D:P(?:AI)?(?=\()/, "D:PAI");
+			assert.deepEqual(winMetadata([{ path: source, acl }]), [expected]);
+			assert.deepEqual(winMetadata([{ path: source }]), [expected]);
+			assert.deepEqual(winMetadata([{ path: destination, acl }]), [expected]);
+			assert.deepEqual(winMetadata([{ path: destination }]), [expected]);
+			assert.doesNotMatch(expected, /\(A;[^;]*ID;/);
 		}
 		success(run("snapshot", paths));
 		success(run("verify", paths));
