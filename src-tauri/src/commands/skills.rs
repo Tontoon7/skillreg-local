@@ -1041,13 +1041,18 @@ fn urlencoded(s: &str) -> String {
         .replace('+', "%2B")
 }
 
-fn ensure_legacy_mutation_allowed(scope: &str, managed_manifest: &std::path::Path) -> Result<(), String> {
+fn ensure_legacy_mutation_allowed(
+    scope: &str,
+    managed_manifest: &std::path::Path,
+) -> Result<(), String> {
     if scope != "user" {
         return Ok(());
     }
     match fs::symlink_metadata(managed_manifest) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Ok(_) => Err("Managed user skills must be changed through the managed commands".to_string()),
+        Ok(_) => {
+            Err("Managed user skills must be changed through the managed commands".to_string())
+        }
         Err(_) => Err("Managed skill state cannot be verified".to_string()),
     }
 }
@@ -1060,15 +1065,20 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn legacy_user_mutations_are_refused_after_managed_adoption_but_project_scope_remains_available() {
-        let root = std::env::temp_dir().join(format!("skillreg-legacy-guard-{}", uuid::Uuid::new_v4()));
+    fn legacy_user_mutations_are_refused_after_managed_adoption_but_project_scope_remains_available(
+    ) {
+        let root =
+            std::env::temp_dir().join(format!("skillreg-legacy-guard-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let manifest = root.join("managed-skills.json");
         assert!(super::ensure_legacy_mutation_allowed("user", &manifest).is_ok());
         std::fs::write(&manifest, "invalid v2 state must also stay protected").unwrap();
         assert!(super::ensure_legacy_mutation_allowed("user", &manifest).is_err());
         assert!(super::ensure_legacy_mutation_allowed("project", &manifest).is_ok());
-        assert_eq!(std::fs::read_to_string(&manifest).unwrap(), "invalid v2 state must also stay protected");
+        assert_eq!(
+            std::fs::read_to_string(&manifest).unwrap(),
+            "invalid v2 state must also stay protected"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -136,8 +136,17 @@ pub(crate) fn metadata_is_link_like(metadata: &fs::Metadata) -> bool {
 }
 
 fn inspect_link(link: &Path) -> Result<LinkInspection, ManagedErrorCode> {
+    let metadata = match fs::symlink_metadata(link) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(LinkInspection::Missing);
+        }
+        Err(_) => return Err(ManagedErrorCode::BindingVerifyFailed),
+    };
     #[cfg(target_os = "windows")]
-    if junction::exists(link).map_err(|_| ManagedErrorCode::BindingVerifyFailed)? {
+    if metadata_is_link_like(&metadata)
+        && junction::exists(link).map_err(|_| ManagedErrorCode::BindingVerifyFailed)?
+    {
         let target =
             junction::get_target(link).map_err(|_| ManagedErrorCode::BindingVerifyFailed)?;
         return Ok(LinkInspection::Link {
@@ -147,13 +156,6 @@ fn inspect_link(link: &Path) -> Result<LinkInspection, ManagedErrorCode> {
         });
     }
 
-    let metadata = match fs::symlink_metadata(link) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Ok(LinkInspection::Missing);
-        }
-        Err(_) => return Err(ManagedErrorCode::BindingVerifyFailed),
-    };
     if !metadata.file_type().is_symlink() {
         return Ok(LinkInspection::Other);
     }
@@ -186,7 +188,9 @@ fn remove_platform_link(link: &Path, kind: LinkKind) -> Result<(), ManagedErrorC
     if kind != LinkKind::Junction {
         return Err(ManagedErrorCode::BindingUnsupported);
     }
-    junction::delete(link).map_err(|_| ManagedErrorCode::BindingVerifyFailed)
+    junction::delete(link).map_err(|_| ManagedErrorCode::BindingVerifyFailed)?;
+    // Removing the reparse point leaves an empty directory; remove only that container.
+    fs::remove_dir(link).map_err(|_| ManagedErrorCode::BindingVerifyFailed)
 }
 
 #[cfg(not(any(unix, target_os = "windows")))]
