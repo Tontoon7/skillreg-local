@@ -63,7 +63,7 @@ scénario 18 n’a pas un playbook de downgrade vérifié.
 | Cargo check verrouillé | A3 | Voir registre |
 | Garde notarisation | A4 | Voir registre |
 | Confidentialité des erreurs et bundle local | A5 | Voir registre |
-| CI Linux/macOS/Windows sur le SHA candidat | N1 | Échec Windows `36671892076` ; correctifs fixture héritée et copie des DACL protégées à rejouer |
+| CI Linux/macOS/Windows sur le SHA candidat | N1 | Échec Windows `36673438738`, champ ACL au clonage ; correctif des bits d’auto-héritage à confirmer sur NTFS |
 | App tests/types/format/build et bundle CLI | N6 | Preuves externes manquantes |
 | Website lint/build, compatibilité téléchargement | N6 | Preuves externes manquantes |
 | Packaging, signatures, notarisation, updater réel | N7 | Non exécutés pendant cette étape |

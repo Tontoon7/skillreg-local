@@ -185,6 +185,43 @@ test("Windows metadata reports only validated native error codes", async (t) => 
 });
 
 if (process.platform === "win32") {
+	test("Windows ACL cloning preserves auto-inheritance without copying the destination parent ACL", async (t) => {
+		const paths = fixture();
+		t.after(() => rmSync(paths.root, { recursive: true, force: true }));
+		const { winMetadata } = await import("../scripts/managed-skills-backup-restore.mjs");
+		const parent = join(paths.external, "different parent été");
+		mkdirSync(parent);
+		const [privateAcl] = winMetadata([{ path: parent, acl: "private" }]);
+		winMetadata([{ path: parent, acl: `${privateAcl}(A;OICI;FR;;;BU)` }]);
+		const sources = [
+			join(paths.home, ".skillreg"),
+			join(paths.home, ".skillreg/config.json"),
+			join(paths.home, ".agents/skills/external"),
+		];
+		const destinations = [
+			join(parent, "directory"),
+			join(parent, "file.json"),
+			join(parent, "link"),
+		];
+		mkdirSync(destinations[0]);
+		writeFileSync(destinations[1], "copy");
+		symlinkSync(paths.external, destinations[2], "junction");
+		const before: string[] = winMetadata(sources.map((path) => ({ path })));
+		for (const acl of before) {
+			assert.match(acl, /D:AI\(/);
+			assert.match(acl, /\(A;[^;]*ID;/);
+			assert.doesNotMatch(acl, /;;;BU\)/);
+		}
+		const initial: string[] = winMetadata(destinations.map((path) => ({ path })));
+		for (const acl of initial) assert.match(acl, /;;;BU\)/);
+		assert.deepEqual(
+			winMetadata(destinations.map((path, index) => ({ path, acl: before[index] }))),
+			before,
+		);
+		assert.deepEqual(winMetadata(destinations.map((path) => ({ path }))), before);
+		assert.equal(readFileSync(join(paths.external, "SKILL.md"), "utf8"), "external untouched");
+	});
+
 	test("Windows metadata applies and clones protected DACLs without parent inheritance", async (t) => {
 		const paths = fixture();
 		t.after(() => rmSync(paths.root, { recursive: true, force: true }));
@@ -195,8 +232,12 @@ if (process.platform === "win32") {
 		assert.match(before, /D:P/);
 		assert.doesNotMatch(before, /\(A;[^;]*ID;/);
 		writeFileSync(destination, "copy");
-		assert.deepEqual(winMetadata([{ path: destination, acl: before }]), [before]);
-		assert.deepEqual(winMetadata([{ path: destination }]), [before]);
+		for (const acl of [before, before.replace("D:P", "D:PAI")]) {
+			assert.deepEqual(winMetadata([{ path: source, acl }]), [acl]);
+			assert.deepEqual(winMetadata([{ path: source }]), [acl]);
+			assert.deepEqual(winMetadata([{ path: destination, acl }]), [acl]);
+			assert.deepEqual(winMetadata([{ path: destination }]), [acl]);
+		}
 		success(run("snapshot", paths));
 		success(run("verify", paths));
 	});

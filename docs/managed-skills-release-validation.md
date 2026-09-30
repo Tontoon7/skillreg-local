@@ -24,9 +24,9 @@ choisi n’ont pas une preuve applicable au candidat.
 
 Les sorties finales, compteurs et restrictions sont consignés après exécution dans ce tableau.
 `PASS local` ne signifie jamais PASS Windows, Linux, lecteur d’écran ou agent réel.
-Après correction des fixtures héritées et de la copie des DACL protégées Windows, A1–A3 ont été rejoués sur `74c8312`
+Après correction de l’écriture des bits d’auto-héritage Windows, A1–A3 ont été rejoués sur `2055060`
 avec le diff de correction : résultats ci-dessous, journaux dans la sortie
-`recovery-1/ci-2-correction`. A4–A5 restent les vérifications précédentes, non réexécutées
+`recovery-1/ci-3-correction`. A4–A5 restent les vérifications précédentes, non réexécutées
 pendant cette correction ; aucun workflow n’a changé.
 
 | ID | Commande / inspection | Résultat courant et portée |
@@ -328,6 +328,35 @@ CI fourni, pas reproduits localement. La valeur divergente du descripteur n’es
 le prochain run doit confirmer la conservation exacte, y compris les bits d’auto-héritage.
 Aucun workflow ni contrôle n’est assoupli. Résultats locaux courants : A1–A3 ; N1/N5 restent
 ouvertes et la release **NO-GO**.
+
+Correction après le run `36673438738`, job `109753191023` : **écriture des bits
+d’auto-héritage ajustée ; confirmation Windows requise**. L’échec se produit au clonage,
+sur le champ `acl` de l’entrée 0 (`.skillreg`), avant toute restauration ou interruption.
+La fixture de cette racine est non protégée et contient des ACE héritées. Le journal ne
+donne pas les descripteurs divergents : la perte de `SE_DACL_AUTO_INHERITED` reste le
+diagnostic à confirmer, pas une observation native locale.
+
+Le helper lit maintenant le contrôle du descripteur converti avec
+`GetSecurityDescriptorControl`. Si `SE_DACL_AUTO_INHERITED` (`0x0400`) est présent,
+il ajoute `SE_DACL_AUTO_INHERIT_REQ` (`0x0100`) à la demande d’écriture brute : le
+noyau doit consommer cette demande et conserver `AI` dans le descripteur stocké.
+La protection reste appliquée explicitement par `SetSecurityInfo` lorsqu’elle est demandée,
+puis la copie brute restaure aussi les bits d’auto-héritage dans ce cas. Aucun recalcul depuis
+le parent de sauvegarde, privilège supplémentaire ou normalisation de l’inventaire n’est ajouté.
+
+Le nouveau test Windows crée dossier, fichier et junction sous un parent doté d’une ACE
+`BU` absente des sources. Il exige `AI` et des ACE `ID` dans les sources, puis l’égalité
+intégrale des ACL après écriture **et réouverture**. La cible externe de la junction reste
+intacte. Le test protégé couvre désormais `P` seul et `PAI`. Les tests existants de snapshot,
+restauration, groupe primaire, renommage et interruption gardent leurs assertions exactes.
+
+`pnpm test:node` passe localement avant correction (**55/55**), mais les quatre tests
+spécifiques Windows ne sont pas exécutés sur macOS. Le journal CI fourni démontre l’échec
+initial ; aucune reproduction rouge/verte Windows n’est revendiquée. La revue indépendante
+n’a relevé aucun défaut bloquant ; le cas `PAI` demandé par la revue a été ajouté.
+Aucun workflow ni contrôle n’est modifié. Les résultats courants sont A1–A3 ; le prochain
+run Windows doit confirmer la consommation de `AR`, la conservation de `AI`/`P` et des ACE.
+N1/N5 restent ouvertes et la release **NO-GO**.
 
 ## N2 — Campagne native isolée et découverte des agents
 

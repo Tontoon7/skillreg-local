@@ -140,6 +140,10 @@ public static class ProfileMetadata {
   [DllImport("advapi32.dll", SetLastError=true)]
   static extern bool SetKernelObjectSecurity(SafeFileHandle handle, uint info, IntPtr descriptor);
   [DllImport("advapi32.dll", SetLastError=true)]
+  static extern bool GetSecurityDescriptorControl(IntPtr descriptor, out ushort control, out uint revision);
+  [DllImport("advapi32.dll", SetLastError=true)]
+  static extern bool SetSecurityDescriptorControl(IntPtr descriptor, ushort interest, ushort value);
+  [DllImport("advapi32.dll", SetLastError=true)]
   static extern bool GetSecurityDescriptorOwner(IntPtr descriptor, out IntPtr owner, out bool defaulted);
   [DllImport("advapi32.dll", SetLastError=true)]
   static extern bool GetSecurityDescriptorGroup(IntPtr descriptor, out IntPtr group, out bool defaulted);
@@ -179,7 +183,9 @@ public static class ProfileMetadata {
         IntPtr next; uint size;
         if (!ConvertStringSecurityDescriptorToSecurityDescriptor(replacement, 1, out next, out size)) throw new Win32Exception(Marshal.GetLastWin32Error());
         try {
-          if (replacement.Contains("D:P")) {
+          ushort control; uint revision;
+          if (!GetSecurityDescriptorControl(next, out control, out revision)) throw new Win32Exception(Marshal.GetLastWin32Error());
+          if ((control & 0x1000) != 0) {
             // SetKernelObjectSecurity does not set file DACL protection. The file API must apply it explicitly.
             IntPtr owner, group, dacl; bool defaulted, present;
             if (!GetSecurityDescriptorOwner(next, out owner, out defaulted) ||
@@ -187,10 +193,11 @@ public static class ProfileMetadata {
                 !GetSecurityDescriptorDacl(next, out present, out dacl, out defaulted)) throw new Win32Exception(Marshal.GetLastWin32Error());
             uint error = SetSecurityInfo(handle, 1, flags | 0x80000000u, owner, group, dacl, IntPtr.Zero);
             if (error != 0) throw new Win32Exception((int)error);
-          } else {
-            // New clones already allow inheritance; keep the saved ACEs without inheriting from the backup parent.
-            if (!SetKernelObjectSecurity(handle, flags, next)) throw new Win32Exception(Marshal.GetLastWin32Error());
           }
+          // The kernel consumes AUTO_INHERIT_REQ to retain AUTO_INHERITED on the stored DACL.
+          if ((control & 0x0400) != 0 && !SetSecurityDescriptorControl(next, 0x0100, 0x0100)) throw new Win32Exception(Marshal.GetLastWin32Error());
+          // Restore the saved control bits and ACEs without inheriting from the backup parent.
+          if (!SetKernelObjectSecurity(handle, flags, next)) throw new Win32Exception(Marshal.GetLastWin32Error());
         } finally { LocalFree(next); }
       }
       // Read the stored descriptor without interpreting inheritance against the current parent.
