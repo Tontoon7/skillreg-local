@@ -8,9 +8,9 @@ export function AppShell({ children }: { children: ReactNode }) {
 		<div className="flex h-screen flex-col overflow-hidden">
 			<Titlebar />
 			<UpdateChecker />
-			<div className="flex flex-1 overflow-hidden">
+			<div className="flex min-w-0 flex-1 overflow-hidden">
 				<Sidebar />
-				<main className="flex-1 overflow-auto bg-background">{children}</main>
+				<main className="min-w-0 flex-1 overflow-auto bg-background">{children}</main>
 			</div>
 		</div>
 	);

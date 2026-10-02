@@ -38,6 +38,53 @@ test("release installs exactly the reviewed JavaScript lockfile", () => {
 	assert.match(workflow, /pnpm install --frozen-lockfile/);
 });
 
+test("CI builds dist and tests every layer on each OS without release permissions", () => {
+	const workflow = source(".github/workflows/ci.yml");
+	for (const os of ["ubuntu-22.04", "macos-14", "windows-2022"]) {
+		assert.ok(workflow.includes(os));
+	}
+	assert.match(workflow, /fail-fast: false/);
+	assert.match(workflow, /contents: read/);
+	assert.match(workflow, /runs-on: \$\{\{ matrix.os \}\}/);
+	assert.match(workflow, /node-version: 22/);
+	assert.match(workflow, /pnpm install --frozen-lockfile/);
+	for (const command of [
+		"pnpm format:check",
+		"pnpm build",
+		"pnpm test:node",
+		"pnpm test:frontend",
+	]) {
+		assert.ok(workflow.includes(command));
+	}
+	assert.match(
+		workflow,
+		/cargo test --no-fail-fast --manifest-path src-tauri\/Cargo.toml --locked/,
+	);
+	assert.match(workflow, /cargo check --manifest-path src-tauri\/Cargo.toml --locked/);
+	assert.ok(workflow.indexOf("pnpm build") < workflow.indexOf("cargo test"));
+	assert.doesNotMatch(workflow, /secrets\.|contents: write|tauri build|gh release/);
+});
+
+test("release prepares complete native updater assets before creating its draft", () => {
+	const workflow = source(".github/workflows/release.yml");
+	assert.match(workflow, /scripts\/generate-updater-manifest.mjs/);
+	assert.match(workflow, /\*\.AppImage\.sig/);
+	assert.match(workflow, /\*\.exe\.sig/);
+	assert.doesNotMatch(workflow, /nsis\.zip|AppImage\.tar\.gz/);
+	assert.ok(
+		workflow.indexOf("scripts/generate-updater-manifest.mjs") <
+			workflow.indexOf("gh release create"),
+	);
+	assert.match(workflow, /--draft/);
+	for (const command of [
+		"xcrun notarytool submit",
+		"xcrun stapler staple",
+		"xcrun stapler validate",
+	]) {
+		assert.ok(workflow.includes(command));
+	}
+});
+
 test("the production frontend is split into bounded chunks", () => {
 	const viteConfig = source("vite.config.ts");
 

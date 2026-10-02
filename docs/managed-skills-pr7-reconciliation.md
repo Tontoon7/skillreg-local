@@ -10,9 +10,9 @@ Ce document donne une décision par commit, par fichier et par assertion modifi�
 **intégré** dans #12 (commit cité), **porté** par ce changement (fichier cité), ou
 **remplacé/refusé** (raison technique). Une ressemblance de titre ne vaut pas intégration.
 Il ne coche aucune case de release et ne lève pas le NO-GO de la
-[checklist](plans/2026-07-29-managed-skills-release-checklist.md). La checklist, le registre de
-validation et le code cités ici sont apportés par la branche de #12 ; ce document s'y lit une fois
-les deux changements réunis.
+[checklist](plans/2026-07-29-managed-skills-release-checklist.md). La branche qui porte ce
+document descend de `595e849` (fusion sans conflit de #12, aucun squash ni rebase) : la checklist,
+le registre de validation et le code cités ici s'y trouvent.
 
 ## 1. Topologie
 
@@ -96,8 +96,8 @@ focus.
 | Rollback dogfood, étapes 1, 4, 5, 6 | Checklist, « Rollback d'une release » | Consignes d'incident ajoutées sans toucher aux cases. Les étapes 2, 3 et 7 sont déjà couvertes par N4 (fermeture, sauvegarde intégrale, binaire legacy identifié). |
 
 `DEV-PLAN.md` et la checklist n'existent sous leur forme Phase 7 que dans #12 : leurs retouches
-s'appliquent sur la branche de #12. Elles se limitent aux lignes citées ci-dessus, plus les rôles
-réels de `main.tsx` et `Settings.tsx` dans l'arborescence et un lien vers ce document.
+sont appliquées ici, au-dessus de `595e849`. Elles se limitent aux lignes citées ci-dessus, plus
+les rôles réels de `main.tsx` et `Settings.tsx` dans l'arborescence et un lien vers ce document.
 
 ## 6. Preuves réutilisées et à rejouer
 
