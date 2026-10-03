@@ -1,360 +1,276 @@
-import { Badge } from "@/components/ui/badge";
+import { EnvVarSetupDialog } from "@/components/EnvVarSetupDialog";
+import {
+	type EmployeeCatalogSkill,
+	EmployeeSkillCard,
+} from "@/components/skills/EmployeeSkillCard";
+import type { SkillPrimaryActionKind } from "@/components/skills/SkillPrimaryAction";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Select } from "@/components/ui/select";
-import { listSkills, scanLocalSkills } from "@/lib/api";
-import { useConfigStore } from "@/lib/store";
-import { tagStyle } from "@/lib/tag-colors";
-import type { PaginatedSkills, RegistrySkill } from "@/lib/types";
-import { cn } from "@/lib/utils";
-import {
-	Check,
-	ChevronLeft,
-	ChevronRight,
-	Download,
-	Loader2,
-	Package,
-	Search,
-	X,
-} from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getCatalogPolicy, listCatalogSkills, listSkills } from "@/lib/api";
+import { useAuthStore, useConfigStore, useManagedSkillsStore } from "@/lib/store";
+import type { EnvVarDecl } from "@/lib/types";
+import { Library, Search, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 
-type SortOption = "updated" | "downloads" | "name";
-
 export function Catalog() {
-	const org = useConfigStore((s) => s.config.org);
+	const org = useConfigStore((state) => state.config.org);
+	const user = useAuthStore((state) => state.user);
+	const model = useManagedSkillsStore((state) => state.model);
+	const installingKeys = useManagedSkillsStore((state) => state.installingKeys);
+	const refreshManaged = useManagedSkillsStore((state) => state.refresh);
+	const install = useManagedSkillsStore((state) => state.install);
+	const updateNow = useManagedSkillsStore((state) => state.updateNow);
 	const navigate = useNavigate();
-
-	const [data, setData] = useState<PaginatedSkills | null>(null);
+	const [skills, setSkills] = useState<EmployeeCatalogSkill[]>([]);
+	const [query, setQuery] = useState("");
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
-	const [search, setSearch] = useState("");
-	const [debouncedSearch, setDebouncedSearch] = useState("");
-	const [sort, setSort] = useState<SortOption>("updated");
-	const [page, setPage] = useState(1);
-	const [selectedTags, setSelectedTags] = useState<string[]>([]);
-	const [knownTags, setKnownTags] = useState<Set<string>>(new Set());
-	const [installedNames, setInstalledNames] = useState<Set<string>>(new Set());
+	const [pendingConfiguration, setPendingConfiguration] = useState<{
+		skillName: string;
+		envVars: EnvVarDecl[];
+	} | null>(null);
 
-	const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+	const activeOrganization = user?.orgs.find((organization) => organization.slug === org);
 
-	useEffect(() => {
-		scanLocalSkills()
-			.then((locals) => {
-				const names = new Set<string>();
-				for (const s of locals) {
-					// Frontmatter name (e.g. "SVG Logo Designer")
-					names.add(s.name.toLowerCase());
-					// Directory name = registry slug (e.g. "svg-logo-designer")
-					const dirName = s.path.split("/").pop() || s.path.split("\\").pop();
-					if (dirName) names.add(dirName.toLowerCase());
-				}
-				setInstalledNames(names);
-			})
-			.catch(() => {});
-	}, []);
+	const load = useCallback(async () => {
+		if (!org) return;
+		setLoading(true);
+		setError(null);
+		try {
+			const [privateResult, policyResult] = await Promise.all([
+				listSkills({ org, page: 1, limit: 200, sort: "updated" }),
+				getCatalogPolicy(org).catch(() => null),
+			]);
+			const publicResult = policyResult?.canInstallFromCatalog
+				? await listCatalogSkills({ page: 1, limit: 100 }).catch(() => null)
+				: null;
 
-	const fetchSkills = useCallback(
-		async (s: SortOption) => {
-			if (!org) return;
-			setLoading(true);
-			setError(null);
-			try {
-				const result = await listSkills({
-					org,
-					page: 1,
-					limit: 200,
-					sort: s,
+			const entries = new Map<string, EmployeeCatalogSkill>();
+			for (const skill of privateResult.skills) {
+				const key = catalogKey(org, skill.name);
+				entries.set(key, {
+					key,
+					name: skill.name,
+					description: skill.description,
+					sourceOrg: org,
+					sourceName: activeOrganization?.name ?? "Votre entreprise",
+					trustLabel: "Approuvée par votre entreprise",
+					tags: skill.tags,
+					detailHref: `/catalog/${encodeURIComponent(skill.name)}`,
 				});
-				setData(result);
-				const tags = new Set<string>();
-				for (const skill of result.skills) {
-					for (const tag of skill.tags) tags.add(tag);
-				}
-				setKnownTags(tags);
-			} catch (e) {
-				setError(typeof e === "string" ? e : "Failed to load skills");
-			} finally {
-				setLoading(false);
 			}
-		},
-		[org],
-	);
+			for (const skill of publicResult?.skills ?? []) {
+				const key = catalogKey(skill.orgSlug, skill.name);
+				if (entries.has(key)) continue;
+				entries.set(key, {
+					key,
+					name: skill.name,
+					description: skill.description,
+					sourceOrg: skill.orgSlug,
+					sourceName: skill.orgName,
+					trustLabel: skill.isFirstParty ? "Éditée par SkillReg" : "Source autorisée",
+					validationLevel: skill.validation.level,
+					tags: skill.tags,
+					detailHref: `/catalog/${encodeURIComponent(skill.name)}?source=${encodeURIComponent(
+						skill.orgSlug,
+					)}`,
+				});
+			}
+			setSkills([...entries.values()]);
+		} catch (loadError) {
+			setError(
+				typeof loadError === "string"
+					? loadError
+					: "Le catalogue n’est pas disponible pour le moment.",
+			);
+		} finally {
+			setLoading(false);
+		}
+	}, [activeOrganization?.name, org]);
 
 	useEffect(() => {
-		fetchSkills(sort);
-	}, [fetchSkills, sort]);
+		void load();
+		void refreshManaged();
+	}, [load, refreshManaged]);
 
-	// Client-side search + tag filtering
 	const filteredSkills = useMemo(() => {
-		if (!data) return [];
-		let result = data.skills;
+		const normalized = query.trim().toLocaleLowerCase("fr");
+		if (!normalized) return skills;
+		return skills.filter(
+			(skill) =>
+				skill.name.toLocaleLowerCase("fr").includes(normalized) ||
+				skill.description?.toLocaleLowerCase("fr").includes(normalized) ||
+				skill.tags.some((tag) => tag.toLocaleLowerCase("fr").includes(normalized)),
+		);
+	}, [query, skills]);
 
-		if (debouncedSearch) {
-			const q = debouncedSearch.toLowerCase();
-			result = result.filter(
-				(s) =>
-					s.name.toLowerCase().includes(q) ||
-					(s.description?.toLowerCase().includes(q) ?? false) ||
-					s.tags.some((t) => t.toLowerCase().includes(q)),
+	const resolveAction = (skill: EmployeeCatalogSkill): SkillPrimaryActionKind => {
+		const key = catalogKey(org ?? "", skill.sourceOrg, skill.name);
+		if (installingKeys.includes(key)) return "installing";
+		const installed = model?.skills.find(
+			(row) => row.name === skill.name && row.sourceOrg === skill.sourceOrg,
+		);
+		if (!installed) return "install";
+		switch (installed.primaryAction) {
+			case "configure":
+				return "configure";
+			case "repair":
+				return "repair";
+			case "update":
+				return "update";
+			default:
+				return "installed";
+		}
+	};
+
+	const handleAction = async (skill: EmployeeCatalogSkill) => {
+		if (!org) return;
+		const action = resolveAction(skill);
+		setError(null);
+		try {
+			if (action === "install") {
+				const result = await install({
+					consumerOrg: org,
+					sourceOrg: skill.sourceOrg,
+					name: skill.name,
+				});
+				if (result.requiredEnvVars.length > 0) {
+					setPendingConfiguration({
+						skillName: skill.name,
+						envVars: result.requiredEnvVars,
+					});
+				}
+				return;
+			}
+			if (action === "configure") {
+				navigate(`/env?skill=${encodeURIComponent(skill.name)}`);
+				return;
+			}
+			if (action === "repair") {
+				navigate(`/installed?skill=${encodeURIComponent(skill.name)}`);
+				return;
+			}
+			if (action === "update") {
+				await updateNow();
+			}
+		} catch (actionError) {
+			setError(
+				typeof actionError === "string" ? actionError : "Cette action n’a pas pu être effectuée.",
 			);
 		}
-
-		if (selectedTags.length > 0) {
-			result = result.filter((s) => selectedTags.every((tag) => s.tags.includes(tag)));
-		}
-
-		return result;
-	}, [data, debouncedSearch, selectedTags]);
-
-	const PAGE_SIZE = 20;
-	const totalPages = Math.ceil(filteredSkills.length / PAGE_SIZE);
-	const pagedSkills = filteredSkills.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-
-	const handleSearch = (value: string) => {
-		setSearch(value);
-		clearTimeout(debounceRef.current);
-		debounceRef.current = setTimeout(() => {
-			setPage(1);
-			setDebouncedSearch(value);
-		}, 300);
 	};
-
-	const toggleTag = (tag: string) => {
-		setPage(1);
-		setSelectedTags((prev) =>
-			prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag],
-		);
-	};
-
-	const clearFilters = () => {
-		setSearch("");
-		setDebouncedSearch("");
-		setSelectedTags([]);
-		setPage(1);
-	};
-
-	const availableTags = useMemo(() => [...knownTags].sort(), [knownTags]);
-
-	const hasActiveFilters = debouncedSearch || selectedTags.length > 0;
 
 	if (!org) {
 		return (
-			<div className="flex flex-col items-center justify-center gap-3 h-full">
-				<Package className="size-10 text-muted-foreground" />
-				<p className="text-muted-foreground">Select an organization first</p>
-				<Button variant="outline" size="sm" onClick={() => navigate("/settings")}>
-					Go to Settings
-				</Button>
+			<div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+				<Library className="size-9 text-muted-foreground" />
+				<p className="text-sm text-muted-foreground">
+					Choisissez d’abord votre entreprise dans les réglages.
+				</p>
 			</div>
 		);
 	}
 
 	return (
-		<div className="flex flex-col gap-4 p-6">
-			<div className="flex items-center justify-between">
-				<h1 className="text-lg font-semibold">{org} — Skills</h1>
-				{hasActiveFilters && (
-					<Button
-						variant="ghost"
-						size="sm"
-						onClick={clearFilters}
-						className="text-xs text-muted-foreground"
+		<div className="mx-auto flex w-full max-w-5xl flex-col gap-5 p-6">
+			<header className="space-y-1">
+				<h1 className="text-xl font-semibold">Catalogue</h1>
+				<p className="text-sm text-muted-foreground">
+					Ajoutez en un clic les skills approuvées pour votre travail.
+				</p>
+			</header>
+
+			<div className="relative">
+				<Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+				<Input
+					type="search"
+					value={query}
+					onChange={(event) => setQuery(event.target.value)}
+					placeholder="Que souhaitez-vous accomplir ?"
+					aria-label="Rechercher une skill"
+					className="h-11 pl-10 pr-10"
+				/>
+				{query && (
+					<button
+						type="button"
+						aria-label="Effacer la recherche"
+						onClick={() => setQuery("")}
+						className="absolute right-2 top-1/2 flex size-8 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 					>
-						<X className="size-3 mr-1" />
-						Clear filters
-					</Button>
+						<X className="size-4" />
+					</button>
 				)}
 			</div>
 
-			{/* Search + Sort */}
-			<div className="flex items-center gap-3">
-				<div className="relative flex-1 min-w-0">
-					<Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-					<Input
-						placeholder="Search skills..."
-						value={search}
-						onChange={(e) => handleSearch(e.target.value)}
-						className="pl-9"
-					/>
-				</div>
-				<Select
-					value={sort}
-					onChange={(e) => {
-						setSort(e.target.value as SortOption);
-						setPage(1);
-					}}
-					className="w-auto shrink-0"
+			{error && (
+				<div
+					className="flex items-center justify-between gap-4 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive"
+					role="alert"
 				>
-					<option value="updated">Recently updated</option>
-					<option value="downloads">Most downloads</option>
-					<option value="name">Name A-Z</option>
-				</Select>
-			</div>
-
-			{/* Tag filters */}
-			{availableTags.length > 0 && (
-				<div className="flex flex-wrap gap-1.5">
-					{availableTags.map((tag) => {
-						const active = selectedTags.includes(tag);
-						return (
-							<button
-								key={tag}
-								type="button"
-								onClick={() => toggleTag(tag)}
-								className={cn(
-									"inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium transition-all cursor-pointer",
-									"hover:brightness-110",
-								)}
-								style={tagStyle(tag, active)}
-							>
-								{tag}
-								{active && <X className="size-3 ml-1 opacity-70" />}
-							</button>
-						);
-					})}
+					<span>{error}</span>
+					<Button variant="outline" size="sm" onClick={() => void load()}>
+						Réessayer
+					</Button>
 				</div>
 			)}
 
-			{/* Skills list */}
 			{loading ? (
-				<div className="flex items-center justify-center py-12">
-					<Loader2 className="size-6 animate-spin text-muted-foreground" />
-				</div>
-			) : error ? (
-				<div className="flex flex-col items-center justify-center gap-2 py-12">
-					<p className="text-sm text-destructive">{error}</p>
-					<Button variant="outline" size="sm" onClick={() => fetchSkills(sort)}>
-						Retry
-					</Button>
-				</div>
-			) : pagedSkills.length > 0 ? (
-				<>
-					{hasActiveFilters && (
-						<p className="text-xs text-muted-foreground">
-							{filteredSkills.length} skill{filteredSkills.length > 1 ? "s" : ""} found
-						</p>
-					)}
-
-					<div className="space-y-3">
-						{pagedSkills.map((skill) => (
-							<SkillCard
-								key={skill.id}
-								skill={skill}
-								installed={installedNames.has(skill.name.toLowerCase())}
-								selectedTags={selectedTags}
-								onTagClick={toggleTag}
-								onClick={() => navigate(`/catalog/${skill.name}`)}
-							/>
-						))}
-					</div>
-
-					{/* Pagination */}
-					{totalPages > 1 && (
-						<div className="flex items-center justify-center gap-2 pt-2">
-							<Button
-								variant="outline"
-								size="sm"
-								disabled={page <= 1}
-								onClick={() => setPage((p) => p - 1)}
-							>
-								<ChevronLeft className="size-4" />
-							</Button>
-							<span className="text-sm text-muted-foreground">
-								Page {page} / {totalPages}
-							</span>
-							<Button
-								variant="outline"
-								size="sm"
-								disabled={page >= totalPages}
-								onClick={() => setPage((p) => p + 1)}
-							>
-								<ChevronRight className="size-4" />
-							</Button>
-						</div>
-					)}
-				</>
-			) : hasActiveFilters ? (
-				<div className="flex flex-col items-center justify-center gap-2 py-12">
-					<Package className="size-10 text-muted-foreground" />
-					<p className="text-muted-foreground">No skills match your filters</p>
-					<Button variant="outline" size="sm" onClick={clearFilters}>
-						Clear filters
-					</Button>
+				<CatalogSkeleton />
+			) : filteredSkills.length > 0 ? (
+				<div className="space-y-3">
+					{filteredSkills.map((skill) => (
+						<EmployeeSkillCard
+							key={skill.key}
+							skill={skill}
+							action={resolveAction(skill)}
+							onAction={() => void handleAction(skill)}
+						/>
+					))}
 				</div>
 			) : (
-				<div className="flex flex-col items-center justify-center gap-2 py-12">
-					<Package className="size-10 text-muted-foreground" />
-					<p className="text-muted-foreground">No skills found</p>
+				<div className="panel-inset flex min-h-52 flex-col items-center justify-center gap-2 rounded-xl p-8 text-center">
+					<Library className="size-8 text-muted-foreground" />
+					<p className="text-sm font-medium">
+						{query ? "Aucune skill ne correspond à votre recherche" : "Le catalogue est vide"}
+					</p>
+					<p className="text-xs text-muted-foreground">
+						{query
+							? "Essayez de décrire le résultat attendu avec d’autres mots."
+							: "Votre administrateur peut publier ou autoriser de nouvelles skills."}
+					</p>
 				</div>
+			)}
+
+			{pendingConfiguration && (
+				<EnvVarSetupDialog
+					skillName={pendingConfiguration.skillName}
+					org={org}
+					envVars={pendingConfiguration.envVars}
+					onClose={() => setPendingConfiguration(null)}
+					onSaved={() => {
+						setPendingConfiguration(null);
+						void refreshManaged();
+					}}
+				/>
 			)}
 		</div>
 	);
 }
 
-function SkillCard({
-	skill,
-	installed,
-	selectedTags,
-	onTagClick,
-	onClick,
-}: {
-	skill: RegistrySkill;
-	installed: boolean;
-	selectedTags: string[];
-	onTagClick: (tag: string) => void;
-	onClick: () => void;
-}) {
+function catalogKey(sourceOrg: string, name: string): string;
+function catalogKey(consumerOrg: string, sourceOrg: string, name: string): string;
+function catalogKey(first: string, second: string, third?: string): string {
+	if (third) return `${first}/${second}/${third}`;
+	return `${first}/${first}/${second}`;
+}
+
+function CatalogSkeleton() {
 	return (
-		<button
-			type="button"
-			onClick={onClick}
-			className={cn(
-				"flex w-full items-start justify-between rounded-xl border bg-card p-4 text-left transition-colors",
-				"hover:border-muted-foreground/30",
-			)}
-		>
-			<div className="flex flex-col gap-1.5 min-w-0 flex-1">
-				<div className="flex items-center gap-2">
-					<span className="font-medium truncate">{skill.name}</span>
-					{skill.latestVersion && <Badge variant="secondary">{skill.latestVersion}</Badge>}
-					{installed && (
-						<span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400 border border-emerald-500/20">
-							<Check className="size-3" />
-							Installed
-						</span>
-					)}
-				</div>
-				{skill.description && (
-					<p className="text-sm text-muted-foreground line-clamp-1">{skill.description}</p>
-				)}
-				{skill.tags.length > 0 && (
-					<div className="flex flex-wrap gap-1">
-						{skill.tags.slice(0, 5).map((tag) => {
-							const active = selectedTags.includes(tag);
-							return (
-								<button
-									key={tag}
-									type="button"
-									onClick={(e) => {
-										e.stopPropagation();
-										onTagClick(tag);
-									}}
-									className="inline-flex items-center rounded-full border px-2 py-0 text-[11px] font-medium transition-all cursor-pointer hover:brightness-125"
-									style={tagStyle(tag, active)}
-								>
-									{tag}
-								</button>
-							);
-						})}
-					</div>
-				)}
-			</div>
-			<div className="flex items-center gap-1 text-xs text-muted-foreground shrink-0 ml-4">
-				<Download className="size-3" />
-				{skill.totalDownloads}
-			</div>
-		</button>
+		<div className="space-y-3 animate-pulse motion-reduce:animate-none">
+			<div className="h-36 rounded-xl bg-card" />
+			<div className="h-36 rounded-xl bg-card" />
+			<div className="h-36 rounded-xl bg-card" />
+		</div>
 	);
 }
