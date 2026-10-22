@@ -386,6 +386,10 @@ jobs:
         with:
           python-version: '3.12'
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Install public signature verifier
         run: |
           sudo apt-get update
@@ -397,6 +401,17 @@ jobs:
           pattern: build-*
           path: downloaded
 
+      - name: Prepare complete native updater manifest
+        env:
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          node scripts/generate-updater-manifest.mjs \
+            --artifacts downloaded --output native-updater \
+            --version "${TAG#v}" \
+            --pub-date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --base-url "https://github.com/${GH_REPO}/releases/download/${TAG}"
+
       - name: Prepare verified release
         run: |
           python scripts/release-artifacts.py prepare --input downloaded --output release-assets \
@@ -404,6 +419,20 @@ jobs:
             --windows-subject "$WINDOWS_SIGNING_SUBJECT" \
             --linux-fingerprint "$LINUX_SIGNING_KEY_FINGERPRINT" \
             --publication release-publication.json --notes release-notes.md
+
+      - name: Add native updater signatures to verified assets
+        run: |
+          cp native-updater/*.sig release-assets/
+          cp native-updater/latest.json release-assets/latest.json
+          python - <<'PY'
+          import json, pathlib
+          publication_path = pathlib.Path('release-publication.json')
+          publication = json.loads(publication_path.read_text())
+          publication['assets'].extend(
+              str(path.resolve()) for path in sorted(pathlib.Path('release-assets').glob('*.sig'))
+          )
+          publication_path.write_text(json.dumps(publication, indent=2) + '\n')
+          PY
 
       - name: Verify transferred Linux signatures
         run: |

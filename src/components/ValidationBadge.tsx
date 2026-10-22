@@ -5,28 +5,28 @@ import { BadgeCheck, ShieldAlert, ShieldCheck, ShieldQuestion } from "lucide-rea
 
 const LEVEL_CONFIG = {
 	certified: {
-		label: "Certified",
+		label: "Certifiée",
 		icon: BadgeCheck,
 		className: "bg-primary/20 text-primary border-primary/30",
-		hint: "Reviewed and maintained by SkillReg",
+		hint: "Revue et maintenue par SkillReg",
 	},
 	verified: {
-		label: "Verified",
+		label: "Vérifiée",
 		icon: ShieldCheck,
-		className: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
-		hint: "Passed every structure and security check",
+		className: "bg-accent/10 text-accent border-accent/30",
+		hint: "Tous les contrôles de structure et de sécurité sont validés",
 	},
 	scanned: {
-		label: "Scanned",
+		label: "Analysée",
 		icon: ShieldAlert,
-		className: "bg-amber-500/15 text-amber-400 border-amber-500/30",
-		hint: "Validation ran and reported failing checks",
+		className: "bg-primary/10 text-primary border-primary/30",
+		hint: "Les contrôles ont été exécutés et demandent votre attention",
 	},
 	unvalidated: {
-		label: "Unvalidated",
+		label: "Non vérifiée",
 		icon: ShieldQuestion,
 		className: "bg-muted text-muted-foreground border-border",
-		hint: "Published before validation was available",
+		hint: "Publiée avant la disponibilité des contrôles",
 	},
 } as const satisfies Record<ValidationLevel, unknown>;
 
