@@ -136,9 +136,11 @@ commandes de précompilation, de préchargement et de packaging.
 9. `publish`, dépendant du succès de toute la matrice, exige les quatre inventaires
    du même run. `prepare` refuse toute plateforme absente, identité incohérente,
    modification, collision, lien symbolique, chemin sortant ou fichier inattendu.
-   Il prépare uniquement les téléchargements autorisés et un `latest.json` complet,
-   puis contrôle aussi tailles et SHA-256 des copies finales avant d'écrire la liste
-   de publication.
+   Il prépare uniquement les téléchargements autorisés et contrôle les tailles et
+   SHA-256 des copies finales avant d'écrire la liste de publication. Le workflow
+   produit ensuite `native-updater/latest.json` avec
+   `scripts/generate-updater-manifest.mjs`, puis copie ce manifeste dans
+   `release-assets/latest.json`.
 10. Vérifier à nouveau OpenPGP sur les fichiers reçus avec la clé et l'empreinte
     des variables GitHub. Seulement après cette étape, créer le brouillon avec la
     liste explicite des assets préparés. Aucun glob n'alimente la commande GitHub.
@@ -149,9 +151,10 @@ commandes de précompilation, de préchargement et de packaging.
 | `linux-x86_64` | `.deb`, `.rpm`, `.AppImage`, leurs trois `.asc`, `.AppImage.sig`, clé publique |
 | `windows-x86_64` | NSIS `.exe` et `.exe.sig`, MSI `.msi` |
 
-Les inventaires et `.sig` ne sont pas des assets publics : les signatures Tauri
-sont lues dans `latest.json`. Les `.asc` Linux et la clé publique sont distribuées.
-Les archives macOS gardent les noms publics `SkillReg_aarch64.app.tar.gz` et
+Les inventaires `verified-files.json` et `release-publication.json` restent internes.
+Les signatures `.sig` Tauri sont aussi publiées comme assets, en plus d'être lues
+dans `latest.json`. Les `.asc` Linux et la clé publique sont distribuées. Les
+archives macOS gardent les noms publics `SkillReg_aarch64.app.tar.gz` et
 `SkillReg_x64.app.tar.gz`, sans modification de leurs octets.
 
 ## Vérification par l'utilisateur
