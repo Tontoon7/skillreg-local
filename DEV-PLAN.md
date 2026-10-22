@@ -587,7 +587,17 @@ signatures exactes. Aucune version/tag/release n’est produit pendant l’impl�
 - [x] Packaging config : `.dmg` (macOS), `.msi` (Windows), `.AppImage` (Linux)
 - [x] GitHub Actions CI/CD : build cross-platform
 - [x] Releases macOS signées + notarized en CI (nécessite secrets Apple GitHub)
+- [x] Releases Windows Authenticode via Azure OIDC et Linux OpenPGP détachées, avec inventaire vérifié avant brouillon
 - [ ] Page de téléchargement sur skillreg.dev
+
+La release garde les quatre plateformes updater et leurs signatures Tauri natives. Le hook
+Windows signe les binaires pendant le packaging ; la CI vérifie le binaire et les installateurs.
+Linux signe les téléchargements `.deb`, `.rpm` et `.AppImage` avec OpenPGP. Les inventaires
+SHA-256 lient les vérifications aux fichiers transférés ; la publication revérifie les signatures
+Linux et ne crée le brouillon qu'après préparation de la liste complète des assets. Les `.asc`
+OpenPGP restent distincts des `.sig` Tauri. La configuration et la recette figurent dans
+`docs/plans/2026-07-30-windows-linux-release-signing-plan.md` ; les tests isolés ne prouvent pas
+une signature Azure réelle.
 
 ---
 

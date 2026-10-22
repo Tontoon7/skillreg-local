@@ -9,7 +9,7 @@ Application de bureau SkillReg (Tauri 2, Rust et React) qui permet d'installer, 
 - Elle consomme la même API REST que la CLI (`https://app.skillreg.dev/api/v1`, contrat dans `skillreg-app/API-REFERENCE.md`) et partage ses fichiers de configuration locaux.
 - **Docs produit et design** : `PRODUCT.md` (utilisateurs, principes et périmètre du desktop), `DESIGN.md` (système visuel sombre, composants, accessibilité) et `docs/managed-skills-pr7-reconciliation.md` (décision par commit et par fichier de la reprise de la PR #7 dans le candidat #12).
 - **Distribution** : releases GitHub de `Tontoon7/skillreg-local` pour macOS (arm64 et x64, signées et notarisées), Linux (`.deb`, `.rpm`, AppImage) et Windows ; mise à jour automatique par le plugin updater de Tauri ; page de téléchargement sur https://skillreg.dev/download.
-- **Docs de référence** : `DEV-PLAN.md` (architecture, commandes Rust, écrans, API), `ROADMAP.md` (avancement par phase), `docs/plans/2026-03-10-macos-notarization.md`, `docs/plans/2026-05-20-skillreg-env-engine-spec.md` (moteur de variables d'environnement par organisation).
+- **Docs de référence** : `DEV-PLAN.md` (architecture, commandes Rust, écrans, API), `ROADMAP.md` (avancement par phase), `docs/plans/2026-03-10-macos-notarization.md`, `docs/plans/2026-05-20-skillreg-env-engine-spec.md` (moteur de variables d'environnement par organisation), `docs/plans/2026-07-30-windows-linux-release-signing-plan.md` (signature et recette des releases).
 - **État** : phases 1 à 6 terminées (squelette, auth et dashboard, catalogue et installation, skills locales et publication, variables d'environnement et réglages, packaging signé et notarisé), puis moteur de variables par organisation, slash commands, mises à jour automatiques des skills, badges de validation et catalogue public. Le candidat inclut désormais le lot A des skills gérées (stockage canonique, bindings, migration opt-in et parcours collaborateur), repris depuis la branche locale dédiée. La release reste NO-GO selon `docs/plans/2026-07-29-managed-skills-release-checklist.md` ; preuves et protocoles dans `docs/managed-skills-release-validation.md`. Le reste à faire est dans `ROADMAP.md`.
 
 ## Carte du code
@@ -49,6 +49,9 @@ Stack : Tauri v2, Rust (reqwest, serde, sha2, tar, flate2, dirs, open, keyring-c
 | `scripts/generate-updater-manifest.mjs` | Prépare les quatre artefacts updater et signatures avant génération de latest.json |
 | `.github/workflows/ci.yml` | CI de vérification Linux/macOS/Windows sans secret ni publication |
 | `scripts/check-release-notarization.sh` | Garde-fou : vérifie que `release.yml` notarise toujours les DMG |
+| `scripts/windows-signing.ps1`, `scripts/linux-signing.sh` | Signature et vérification natives Authenticode / OpenPGP avec identités attendues |
+| `scripts/release-artifacts.py` | Collecte stricte, inventaires SHA-256, validation des transferts et préparation des assets de release |
+| `tests/test_release_artifacts.py`, `scripts/test-*-signing.*` | Tests de contrat de release, GPG éphémère et wrapper PowerShell |
 
 ## Commandes
 
@@ -69,6 +72,10 @@ pnpm test:node                  # node --test sur tests/*.test.ts
 pnpm test:frontend              # Vitest run ; peut recevoir un chemin de test
 node --test --experimental-strip-types tests/env-inventory.test.ts   # un fichier
 bash scripts/check-release-notarization.sh                   # après une modification de release.yml (requiert rg)
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -p 'test_release_artifacts.py' -v
+bash scripts/test-linux-signing.sh                          # requiert GnuPG ; trousseaux de test isolés
+pwsh -NoProfile -File scripts/test-windows-signing.ps1       # Windows + WINDOWS_SIGNTOOL_PATH vers SignTool
+actionlint .github/workflows/release.yml                     # validation du workflow
 ```
 
 **Validation de l'usine pour ce candidat** : `pnpm format:check && pnpm build && cargo test --manifest-path src-tauri/Cargo.toml --locked && node --test --experimental-strip-types tests/*.test.ts`.
@@ -103,6 +110,8 @@ Dans l'usine, ne lance jamais `pnpm tauri dev`, `pnpm dev` ou `pnpm tauri build`
 
 - Branche cible : `main`. `.github/workflows/ci.yml` vérifie les PR et `main` sur Linux/macOS/Windows (format, build, Node, Vitest, Cargo verrouillé). Cette CI ne signe ni ne publie ; ses résultats doivent être rattachés au candidat avant GO.
 - Release (`.github/workflows/release.yml`) : sur un tag `v*`, build Tauri pour macOS arm64 et x64 (signature Developer ID, notarisation et agrafage des DMG), Linux et Windows, puis création d'une release GitHub **en brouillon** avec les installeurs et `latest.json` pour l'updater. Axel publie ensuite le brouillon. Un build complet peut durer plus de deux heures.
+- Windows exige Azure Artifact Signing via OIDC ; Linux exige des signatures OpenPGP détachées sur les téléchargements `.deb`, `.rpm` et `.AppImage`. Variables et secrets requis : voir le plan de signature. La configuration externe et la recette Azure réelle ne sont pas démontrées par les tests isolés.
+- La publication vérifie les quatre inventaires, les identités attendues et les SHA-256 transférés, puis revérifie OpenPGP. Elle utilise uniquement la liste d'assets préparée ; aucune création de brouillon n'a lieu si un contrôle échoue. Seul le job `publish` dispose de `contents: write`.
 - Une release commence par un commit `chore: release x.y.z` qui change la version dans `package.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock` et `src-tauri/tauri.conf.json`, puis le tag `vx.y.z`. Ni tag ni bump de version sans demande d'Axel.
 - Politique de l'usine pour ce dépôt : livraison `review`. L'usine ouvre une PR et la laisse en « À valider » ; Axel fusionne et publie une release manuellement.
 
@@ -131,13 +140,14 @@ Les tickets de ce dépôt sont exécutés par l'usine de développement d'Axel (
 - La version de l'application vit dans `package.json`, `src-tauri/Cargo.toml` (et `Cargo.lock`) et `src-tauri/tauri.conf.json` ; ils doivent rester identiques.
 - `~/.skillreg/config.json` est écrit par Rust (login) et par le frontend : passe par `useConfigStore.update()`, qui relit le disque avant de fusionner, sinon le token écrit par `login_poll` est écrasé.
 - L'icône de tray est créée en Rust (`lib.rs`), pas dans `tauri.conf.json` ; `src-tauri/tests/tray_config.rs` échoue si `app.trayIcon` y est ajouté.
-- Updater : `bundle.createUpdaterArtifacts=true` exige `.app.tar.gz` sur macOS, `.exe` NSIS sur Windows et `.AppImage` sur Linux, chacun avec sa propre `.sig`. Le helper refuse plateforme/signature manquante avant création du brouillon ; tests factices ≠ signature cryptographique réelle. `plugins.updater.pubkey` doit correspondre à la clé de release. `pnpm tauri:build:local` désactive la signature uniquement en local.
+- Updater : `bundle.createUpdaterArtifacts=true` exige `.app.tar.gz` sur macOS, `.exe` NSIS sur Windows et `.AppImage` sur Linux, chacun avec sa propre `.sig`. Le helper refuse une plateforme ou une signature manquante ; ces `.sig` Tauri restent distinctes des `.asc` OpenPGP distribuées pour Linux. `plugins.updater.pubkey` doit correspondre à la clé de release. `pnpm tauri:build:local` désactive les artefacts updater en local.
 - `.gitignore` exclut `*.png`, `*.jpg` et `*.jpeg` hors `src-tauri/icons/*.png` : une image ajoutée ailleurs n'est pas commitée, sans avertissement.
 - La branche de la PR #7 (`feat/phase-7-lot-a-managed-skills`, `6d18e9e`) n'est pas ancêtre du candidat #12 : son code y a été repris par patchs puis durci. N'en recopie rien sans lire `docs/managed-skills-pr7-reconciliation.md` : `is_symlink()` au lieu de `metadata_is_link_like`, la fermeture des dialogues au clic sur le fond ou les adaptateurs macOS x64 y sont des régressions refusées.
 - `src-tauri/gen/schemas/desktop-schema 2.json` et `desktop-schema 3.json` sont des doublons iCloud commités par erreur : ne les modifie pas et ne crée aucun fichier suffixé ` 2`.
 - `scripts/check-release-notarization.sh` requiert `rg` dans le PATH ; sa présence est une condition du contrôle, pas une notarisation réelle.
 - Le setup ouvre `https://app.skillreg.dev/onboarding?source=desktop` pour créer un workspace : une release du desktop qui contient ce parcours doit suivre le déploiement de l'app qui sert `/onboarding`.
 - Publication de commandes (`slash_commands.rs`) : reprendre le contenu brut du registre, car les fichiers installés pour Claude/Codex ajoutent des enveloppes ; la portée de publication inclut `org`, contrairement à `ScopeType` (`project`/`user`) réservé aux installations. Pour valider la longueur, `trim_command_publication_text()` suit le `trim()` JavaScript : BOM U+FEFF retiré et NEL U+0085 conservé, à l'inverse de `str::trim()` Rust.
+- Le hook Windows `bundle.windows.signCommand` signe pendant `tauri bundle`, avant les signatures updater ; ne modifie ensuite ni l'archive ni sa signature. La configuration CI temporaire utilise l'objet `cmd`/`args` pour préserver les chemins avec espaces. La compilation Windows précède `azure/login`, puis le jeton de signature est préchargé immédiatement avant le packaging.
 - Windows : une junction/reparse point n’est pas forcément `is_symlink()` ; employer le contrôle de `platform_links` et sa suppression dédiée, jamais `remove_file` pour retirer un binding junction. Les tests administrateur ne prouvent pas les droits d’un compte standard.
 - Sauvegarde Windows : Node transmet stdin en UTF-8, contrairement à l’encodage console implicite de Windows PowerShell 5.1. Lire les chemins/JSON avec `StreamReader(Console.OpenStandardInput(), Encoding.UTF8)` ; conserver la fixture `profil été` de `pnpm test:node` pour couvrir les ACL et junctions avec accents. Les erreurs de restauration précisent la phase ; conserver les blocs `not ok` complets, car le seul total PASS/FAIL ne localise pas une panne. `pnpm test:node` garde `--test-reporter=spec` : hors terminal, le reporter TAP par défaut laisse les erreurs au milieu du journal, alors que spec les répète après les totaux, dans la fin transmise par l’usine. Les tests d’interruption doivent vérifier l’exception du hook, pas accepter toute erreur de préparation.
 - PowerShell Windows : importer `Microsoft.PowerShell.Security` depuis `$PSHOME/Modules` avant `Get-Acl`/`Set-Acl`, car `powershell.exe` peut hériter d’un `PSModulePath` incompatible de `pwsh`. Le test ACL Node injecte un module homonyme incompatible. Les comparaisons d’inventaire après déplacement restent hors du hook `afterRename` : `during()` masque les détails des `AssertionError` derrière `ERR_ASSERTION`.

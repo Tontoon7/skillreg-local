@@ -68,12 +68,17 @@ test("CI builds dist and tests every layer on each OS without release permission
 test("release prepares complete native updater assets before creating its draft", () => {
 	const workflow = source(".github/workflows/release.yml");
 	assert.match(workflow, /scripts\/generate-updater-manifest.mjs/);
-	assert.match(workflow, /\*\.AppImage\.sig/);
-	assert.match(workflow, /\*\.exe\.sig/);
+	assert.match(workflow, /cp native-updater\/\*\.sig release-assets\//);
+	assert.match(workflow, /release-artifacts\.py prepare/);
+	assert.match(workflow, /release-artifacts\.py collect/);
 	assert.doesNotMatch(workflow, /nsis\.zip|AppImage\.tar\.gz/);
 	assert.ok(
 		workflow.indexOf("scripts/generate-updater-manifest.mjs") <
-			workflow.indexOf("gh release create"),
+			workflow.indexOf("'gh', 'release', 'create'"),
+	);
+	assert.ok(
+		workflow.indexOf("release-artifacts.py prepare") <
+			workflow.indexOf("'gh', 'release', 'create'"),
 	);
 	assert.match(workflow, /--draft/);
 	for (const command of [
