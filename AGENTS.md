@@ -41,6 +41,7 @@ Stack : Tauri v2, Rust (reqwest, serde, sha2, tar, flate2, dirs, open, keyring-c
 | `src/lib/store.ts`, `types.ts`, `employee-model.ts`, `constants.ts` | Stores auth/config/managed, modèle collaborateur et contrats Rust/TypeScript |
 | `src/lib/*.ts` (autres) | Logique sans IPC : inventaire des variables (`env-inventory.ts`), regroupement des skills installées (`installed-skill-groups.ts`), préremplissage et validation de publication de commandes (`command-publishing.ts`), testés dans `tests/` ; actions locales, notifications, couleurs de tags, `cn()` |
 | `src/styles/globals.css` | Base Tailwind, palette sombre, prose |
+| `README.md` | Page publique en anglais (ce que fait l'app, téléchargement, CLI) ; contenu gardé par `tests/readme.test.ts` |
 | `tests/*.test.ts` | Tests Node : logique pure, release/updater et outil de sauvegarde/restauration |
 | `src/**/__tests__/`, `src/test/`, `vitest.config.ts` | Tests React/Testing Library et mock IPC strict (commande non préparée = erreur) |
 | `src/components/dashboard/`, `skills/`, `settings/` | Parcours collaborateur, confirmations natives et import local |
@@ -95,6 +96,7 @@ Dans l'usine, ne lance jamais `pnpm tauri dev`, `pnpm dev` ou `pnpm tauri build`
 - **Rollback de release** : sauvegarde intégrale antérieure via l’outil interne snapshot/verify/restore, home et chemins absolus explicites. Restore est un aperçu sans `--apply --recovery <dossier distinct>`. Le journal permet une reprise ; l’état remplacé reste conservé. Les trousseaux ne sont jamais exportés. Nécessite Node et outils ACL natifs (Linux : paquet `acl`). Le test filesystem ne valide pas un binaire legacy réel.
 - **Confidentialité** : erreurs managed exposées par code constant ; seul le statut HTTP validé peut être persisté comme paramètre. Les handlers globaux frontend ne journalisent pas les payloads d’erreur. Aucune intégration Sentry ni télémétrie d’usage dans le desktop.
 - **TDD** pour la logique (installation, archives, variables, parsing, packaging, commandes Rust) : test Rust dans un module `#[cfg(test)]` ou `src-tauri/tests/`, test TypeScript dans `tests/`. Un test ne touche ni le vrai `~/.skillreg` ni le trousseau du système : dossier temporaire et `MemoryCredentialBackend`, comme les tests existants de `env.rs` et `installed_manifest.rs`.
+- **README public** : en anglais, il ne renvoie vers le téléchargement que par `https://skillreg.dev/download`, sans version, signature, notarisation, plateforme ni lien vers les releases GitHub tant que la checklist de distribution est NO-GO ; `tests/readme.test.ts` le vérifie. Aucune capture n'existe : `*.png`/`*.jpg` sont ignorés hors de `src-tauri/icons/`.
 - UI : garder l'esthétique sombre d'outil développeur et les composants existants.
 - **Secrets** : ne jamais copier de valeur de `.env`, de `.claude/settings.local.json`, de clé de signature Tauri ou d'identifiant Apple dans le code, les tests ou la doc.
 - `ROADMAP.md` : ne le modifie que si le ticket le demande (voir « Sessions avec Axel »).
